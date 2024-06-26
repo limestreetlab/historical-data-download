@@ -1,0 +1,9 @@
+#java files
+*.class 
+*.log 
+
+#IBAPI source
+com/
+
+#macOS specific
+.DS_Store 

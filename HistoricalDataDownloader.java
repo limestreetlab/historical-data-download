@@ -6,16 +6,20 @@ import java.util.Map;
 import java.util.Map.Entry;
 import java.util.concurrent.Callable;
 import java.time.format.DateTimeFormatter;
+import java.time.LocalDateTime;
+import java.time.ZonedDateTime;
+import java.time.ZoneId;
 import java.io.IOException;
-import java.time.*;
 
 
 public class HistoricalDataDownloader implements EWrapper, Callable<String> {
 
-    public static final DateTimeFormatter dateTimeFormat = DateTimeFormatter.ofPattern("yyyyMMdd HH:mm:ss"); //format for intraday data
-    public static final DateTimeFormatter dateFormat = DateTimeFormatter.ofPattern("yyyyMMdd"); //format for non-intraday data 
-    public static final String lineDelimiter = System.lineSeparator(); //newline delimiter
-    public static final Set<Integer> nonErrorCodes = Set.of(2104, 2106, 2158); //IB error codes representing data farm connection notifications rather than actual errors
+    private static final DateTimeFormatter dateTimeWithTimezoneFormat = DateTimeFormatter.ofPattern("yyyyMMdd HH:mm:ss VV"); //format for intraday data with timezone, VV for timezone
+    private static final DateTimeFormatter dateTimeWithoutTimezoneFormat = DateTimeFormatter.ofPattern("yyyyMMdd HH:mm:ss"); //format for intraday data without timezone, VV for timezone
+    private static final DateTimeFormatter dateFormat = DateTimeFormatter.ofPattern("yyyyMMdd"); //format for non-intraday data 
+    private static final ZoneId timezone = ZoneId.of("America/New_York"); //Java ZonedDateTime Class timezone obj, always use EST
+    private static final String lineDelimiter = System.lineSeparator(); //newline delimiter
+    private static final Set<Integer> nonErrorCodes = Set.of(2104, 2106, 2158); //IB error codes representing data connection notifications rather than actual errors, shall be ignored
     
     private EClientSocket client; //socket obj to send TWS requests
     private EReaderSignal readerSignal; 
@@ -29,7 +33,7 @@ public class HistoricalDataDownloader implements EWrapper, Callable<String> {
     private String reqDataType;
     final private int portNumber = 7496;
 
-    private boolean IsRequestFinsihed = false; //flag to mark end of data request
+    private boolean isThisRequestDone = false; //flag to mark end of data request
     private String result;
     private StringBuilder resultBuilder = new StringBuilder(); //for holding returned data
 
@@ -46,12 +50,14 @@ public class HistoricalDataDownloader implements EWrapper, Callable<String> {
     
     public static void main (String[] args) {
 
-        HistoricalDataDownloader downloader = new HistoricalDataDownloader("AAPL", "20240621 16:00:00 America/New_York", "1 D", "1 hour", "TRADES");
+        String dateTime = makeDateTime(2024, 6, 21);
+
+        HistoricalDataDownloader downloader = new HistoricalDataDownloader("AAPL", dateTime, "1 D", "1 hour", "TRADES");
         downloader.openConnection(downloader.portNumber);
       
         downloader.request();
 
-        while ( !downloader.IsRequestFinsihed ) {
+        while ( !downloader.isThisRequestDone ) {
 
             downloader.readerSignal.waitForSignal();
 
@@ -72,6 +78,23 @@ public class HistoricalDataDownloader implements EWrapper, Callable<String> {
     public String call() {
         return "something";
     }
+
+    /*
+    @return string in IBAPI dateTime format with timezone specified
+    */
+    static private String makeDateTime(int year, int month, int day) {
+        ZonedDateTime dateTime = ZonedDateTime.of(year, month, day, 16, 0, 0, 0, timezone); //creating a ZonedDateTime obj
+        return dateTime.format(dateTimeWithTimezoneFormat); //format to string
+    }
+
+    /*
+    @return string in IBAPI dateTime format with timezone specified
+    @return string in IBAPI dateTime format without timezone 
+    */
+    static private String removeTimezone(String dateTimeWithTimezone) {
+        LocalDateTime dateTime = LocalDateTime.parse(dateTimeWithTimezone, dateTimeWithTimezoneFormat); //create a DateTime obj from string, tz removed
+        return dateTime.format(dateTimeWithoutTimezoneFormat); //format to string
+    }
     
     /*
     setting variables for the Contract object
@@ -88,12 +111,12 @@ public class HistoricalDataDownloader implements EWrapper, Callable<String> {
     reqHistoricalData is the EClient method to request historical data and its callback is HistoricalData()
     @param int Id: uniquie id to tag the request
     @param Contract contract: Contract object representing the underlying
-    @param String endDateTime: yyyyMMdd HH:mm:ss format or empty for current
+    @param String endDateTime: yyyyMMdd HH:mm:ss timezone format or empty for current; timezone format in America/New_York
     @param String dataWindow: "<digit> DurationString" where DurationString is S = seconds, D = day, W = week, M = month, Y = year
     @param String dataSize: "<digit> SizeString", valid strings are <1/5/10/15/30> secs, <1/2/3/5/10/15/20/30> mins, <1/2/3/4/8> hours, <1> day/week/month; note 1 min and 1 hour (no s)
     @param String dataType: BID, ASK, MIDPOINT, TRADES
     @param bool RegularHoursOnly: true to use regular market hours
-    @param bool dataDateFormat: true for yyyyMMdd HH:mm:ss
+    @param bool dataDateFormat: true for yyyyMMdd HH:mm:ss TZ
     @param bool KeepUpToDate: false
     @param List options: null
     @see: https://ibkrcampus.com/ibkr-api-page/twsapi-doc/#requesting-historical-bars
@@ -114,7 +137,7 @@ public class HistoricalDataDownloader implements EWrapper, Callable<String> {
     @Override
     public void historicalData(int reqId, Bar candlestick) {
 
-        String datetimestamp = candlestick.time(); //return format is yyyymmdd or yyyymmdd hh:mm:ss TZ
+        String datetimestamp = removeTimezone( candlestick.time() ); //return format is yyyymmdd or yyyymmdd hh:mm:ss timezone
         String open = String.valueOf( candlestick.open() );
         String close = String.valueOf( candlestick.close() );
 
@@ -129,10 +152,7 @@ public class HistoricalDataDownloader implements EWrapper, Callable<String> {
     */
     @Override
     public void historicalDataEnd(int reqId, String startDateStr, String endDateStr) {
-        this.IsRequestFinsihed = true;
-    }
-    
-    public void historicalSchedule(int reqId, String startDateTime, String endDateTime, String timeZone, List<HistoricalSession> sessions) {
+        this.isThisRequestDone = true; //set flag to true
     }
 
     public void nextValidId(int orderId) {
@@ -175,7 +195,6 @@ public class HistoricalDataDownloader implements EWrapper, Callable<String> {
     private enum PriceDataType {
         BID, 
         ASK,
-        MIDPOINT,
         TRADES
     }
 
@@ -203,6 +222,9 @@ public class HistoricalDataDownloader implements EWrapper, Callable<String> {
     }
 
     //all irrelevant EWrapper interface callback functions, left empty
+    public void historicalSchedule(int reqId, String startDateTime, String endDateTime, String timeZone, List<HistoricalSession> sessions) {
+    }
+
     public void tickPrice(int tickerId, int field, double price, TickAttrib attrib) {
     }
 
