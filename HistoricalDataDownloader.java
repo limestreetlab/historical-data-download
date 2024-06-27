@@ -1,6 +1,7 @@
 import com.ib.client.*;
 import java.util.stream.*;
 import java.util.List;
+import java.util.ArrayList;
 import java.util.Set;
 import java.util.Map;
 import java.util.Map.Entry;
@@ -12,52 +13,60 @@ import java.time.ZoneId;
 import java.io.IOException;
 
 
-public class HistoricalDataDownloader implements EWrapper, Callable<String> {
+public class HistoricalDataDownloader implements EWrapper {
 
+    //static variables
+    private static final int portNumber = 7496; 
     private static final DateTimeFormatter dateTimeWithTimezoneFormat = DateTimeFormatter.ofPattern("yyyyMMdd HH:mm:ss VV"); //format for intraday data with timezone, VV for timezone
     private static final DateTimeFormatter dateTimeWithoutTimezoneFormat = DateTimeFormatter.ofPattern("yyyyMMdd HH:mm:ss"); //format for intraday data without timezone, VV for timezone
     private static final DateTimeFormatter dateFormat = DateTimeFormatter.ofPattern("yyyyMMdd"); //format for non-intraday data 
     private static final ZoneId timezone = ZoneId.of("America/New_York"); //Java ZonedDateTime Class timezone obj, always use EST
     private static final String lineDelimiter = System.lineSeparator(); //newline delimiter
     private static final Set<Integer> nonErrorCodes = Set.of(2104, 2106, 2158); //IB error codes representing data connection notifications rather than actual errors, shall be ignored
-    
+    //API connection handles
     private EClientSocket client; //socket obj to send TWS requests
     private EReaderSignal readerSignal; 
     private EReader reader; //reader thread obj, to handle message queue I/O  
-
+    //request parameters
     private Contract contract = new Contract(); //IBKR Contract obj
     private String ticker; 
     private String reqEndDateTime; 
     private String reqLookbackWindow; //from end datetime, how long to retrieve
     private String reqBarSize; //data granularity
-    private String reqDataType;
-    final private int portNumber = 7496;
-
-    private boolean isThisRequestDone = false; //flag to mark end of data request
-    private String result;
-    private StringBuilder resultBuilder = new StringBuilder(); //for holding returned data
+    //processing, result, other variables
+    private boolean isBidRequestDone = false; //flag to mark end of bid request
+    private boolean isAskRequestDone = false; //flag to mark end of ask request
+    private boolean isTradesRequestDone = false; //flag to mark end of trades request
+    private String bidResult;
+    private StringBuilder bidResultBuilder = new StringBuilder(); 
+    private String askResult;
+    private StringBuilder askResultBuilder = new StringBuilder(); 
+    private String tradesResult;
+    private StringBuilder tradesResultBuilder = new StringBuilder(); 
 
     /*
-    Constructor
+    Constructor, setting instance variables to the request parameters
     */
-    public HistoricalDataDownloader(String ticker, String reqEndDateTime, String reqLookbackWindow, String reqBarSize, String reqDataType) {
+    public HistoricalDataDownloader(String ticker, String reqEndDateTime, String reqLookbackWindow, String reqBarSize) {
         this.ticker = ticker;
         this.reqEndDateTime = reqEndDateTime;
         this.reqLookbackWindow = reqLookbackWindow;
         this.reqBarSize = reqBarSize;
-        this.reqDataType = reqDataType;
     }
     
     public static void main (String[] args) {
 
+        //initialize request parameters
         String dateTime = makeDateTime(2024, 6, 21);
 
-        HistoricalDataDownloader downloader = new HistoricalDataDownloader("AAPL", dateTime, "1 D", "1 hour", "TRADES");
-        downloader.openConnection(downloader.portNumber);
-      
-        downloader.request();
+        HistoricalDataDownloader downloader = new HistoricalDataDownloader("NVDA", dateTime, "1 D", "1 hour");
+        downloader.openConnection(portNumber);
+        
+        downloader.request(PriceDataType.BID, 1);
+        downloader.request(PriceDataType.ASK, 2);
+        downloader.request(PriceDataType.TRADES, 3);
 
-        while ( !downloader.isThisRequestDone ) {
+        while ( !downloader.isBidRequestDone || !downloader.isAskRequestDone || !downloader.isTradesRequestDone  ) { //
 
             downloader.readerSignal.waitForSignal();
 
@@ -69,14 +78,14 @@ public class HistoricalDataDownloader implements EWrapper, Callable<String> {
 
         }
 
-        System.out.println(downloader.resultBuilder.toString());
+        System.out.println("Bids are:");
+        System.out.println(downloader.bidResultBuilder.toString());
+        System.out.println("Asks are:");
+        System.out.println(downloader.askResultBuilder.toString());
+        System.out.println("Trades are:");
+        System.out.println(downloader.tradesResultBuilder.toString());
         System.exit(0);
    
-    }
-
-    @Override
-    public String call() {
-        return "something";
     }
 
     /*
@@ -121,11 +130,18 @@ public class HistoricalDataDownloader implements EWrapper, Callable<String> {
     @param List options: null
     @see: https://ibkrcampus.com/ibkr-api-page/twsapi-doc/#requesting-historical-bars
     */
-    private void request() {
+    private void request(PriceDataType reqDataType, int reqId) {
         this.setContract();
-        this.client.reqHistoricalData(1, this.contract, this.reqEndDateTime, this.reqLookbackWindow, this.reqBarSize, this.reqDataType, 1, 1, false, null);
+        this.client.reqHistoricalData(reqId, this.contract, this.reqEndDateTime, this.reqLookbackWindow, this.reqBarSize, reqDataType.name(), 1, 1, false, null);
     }
 
+    private void request() { //overloaded no arg-request
+        this.request(PriceDataType.TRADES, 1);
+    }
+
+    private void request(PriceDataType reqDataType) { //overloaded type-only request
+        this.request(reqDataType, 1);
+    }
 
     /*
     data requested by reqHistoricalData() will be received inside this callback; EReader pushes incoming messages into queue, processMsgs() will call Encoder to check message type and invoke relevant callback.
@@ -135,15 +151,26 @@ public class HistoricalDataDownloader implements EWrapper, Callable<String> {
     @see: https://ibkrcampus.com/ibkr-api-page/twsapi-ref/#ewrapper-pub-func
     */
     @Override
-    public void historicalData(int reqId, Bar candlestick) {
+    public void historicalData(int reqId, Bar candlestick) throws IllegalArgumentException {
 
         String datetimestamp = removeTimezone( candlestick.time() ); //return format is yyyymmdd or yyyymmdd hh:mm:ss timezone
-        String open = String.valueOf( candlestick.open() );
-        String close = String.valueOf( candlestick.close() );
+        String price = String.valueOf( candlestick.open() );
+        ArrayList<String> data = new ArrayList<>();
+        data.add(datetimestamp);
+        data.add(price);
 
-        String[] data = {datetimestamp, open, close};
-        String csv = Stream.of(data).collect(Collectors.joining(", ")); 
-        this.resultBuilder.append(csv + lineDelimiter);
+        if (reqId == 3) {
+            String volume = String.valueOf( candlestick.volume() );
+            data.add(volume);
+        } 
+
+        String csv = data.stream().collect(Collectors.joining(", ")); 
+        switch (reqId) {
+            case 1 -> this.bidResultBuilder.append(csv + lineDelimiter);
+            case 2 -> this.askResultBuilder.append(csv + lineDelimiter);
+            case 3 -> this.tradesResultBuilder.append(csv + lineDelimiter);
+            default -> throw new IllegalArgumentException("Unable to recognise request ID to identify request price type, failed to allocate data.");
+        }
 
     }
 
@@ -151,8 +178,13 @@ public class HistoricalDataDownloader implements EWrapper, Callable<String> {
     If reqHistoricalData used keepUpToDate = false, once all data points for a request have been received in HistoricalData(), this callback is invoked  
     */
     @Override
-    public void historicalDataEnd(int reqId, String startDateStr, String endDateStr) {
-        this.isThisRequestDone = true; //set flag to true
+    public void historicalDataEnd(int reqId, String startDateStr, String endDateStr) throws IllegalArgumentException {
+        switch (reqId) {
+            case 1 -> this.isBidRequestDone = true; 
+            case 2 -> this.isAskRequestDone = true;
+            case 3 -> this.isTradesRequestDone = true;
+            default -> throw new IllegalArgumentException("Unable to recognise request ID in identifying request price type.");
+        }
     }
 
     public void nextValidId(int orderId) {
@@ -219,6 +251,153 @@ public class HistoricalDataDownloader implements EWrapper, Callable<String> {
         public int getPort() {
             return Integer.valueOf(this.toString());
         }
+    }
+
+    //Data object for bid price data
+    private record Bid(String datetime, double bid) implements Comparable<Bid> {
+
+        //considered equal if datetime identical
+        @Override
+        public boolean equals(Object that) {
+            if (that == null || !(that instanceof Bid)) {
+                return false;
+            } 
+            Bid thatBid = (Bid)that; //that obj is an instance of Bid, can cast
+            if (this.datetime.equals(thatBid.datetime)) {
+                return true;
+            } 
+            return false;
+        }
+
+        //Bid obj A is considered larger than Bid obj B if its datetime is after that of B (ie recent data is larger)
+        @Override
+        public int compareTo(Bid that){
+            if (this.datetime.equals(that.datetime)) {
+                return 0;
+            }
+
+            LocalDateTime thisDateTime = LocalDateTime.parse(this.datetime, dateTimeWithoutTimezoneFormat);
+            LocalDateTime thatDateTime = LocalDateTime.parse(that.datetime, dateTimeWithoutTimezoneFormat);
+
+            return dateTimeCompare(thisDateTime, thatDateTime);
+        }
+
+    }
+
+    //Data object for ask price data
+    private record Ask(String datetime, double ask) implements Comparable<Ask> {
+
+        @Override
+        public boolean equals(Object that) {
+            if (that == null || !(that instanceof Ask)) {
+                return false;
+            } 
+            Ask thatAsk = (Ask)that; //that obj is an instance of Ask, can cast
+            if (this.datetime.equals(thatAsk.datetime)) {
+                return true;
+            } 
+            return false;
+        }
+
+        //Ask obj A is considered larger than Ask obj B if its datetime is after that of B (ie recent data is larger)
+        @Override
+        public int compareTo(Ask that){
+            if (this.datetime.equals(that.datetime)) {
+                return 0;
+            }
+
+            LocalDateTime thisDateTime = LocalDateTime.parse(this.datetime, dateTimeWithoutTimezoneFormat);
+            LocalDateTime thatDateTime = LocalDateTime.parse(that.datetime, dateTimeWithoutTimezoneFormat);
+
+            return dateTimeCompare(thisDateTime, thatDateTime);
+        }
+
+    }
+
+    //Data object for trades price data
+    private record Trades(String datetime, double trades, int volume) implements Comparable<Trades> {
+
+        @Override
+        public boolean equals(Object that) {
+            if (that == null || !(that instanceof Trades)) {
+                return false;
+            } 
+            Trades thatTrades = (Trades)that; //that obj is an instance of Trades, can cast
+            if (this.datetime.equals(thatTrades.datetime)) {
+                return true;
+            } 
+            return false;
+        }
+
+        //Trades obj A is considered larger than Trades obj B if its datetime is after that of B (ie recent data is larger)
+        @Override
+        public int compareTo(Trades that){
+            if (this.datetime.equals(that.datetime)) {
+                return 0;
+            }
+
+            LocalDateTime thisDateTime = LocalDateTime.parse(this.datetime, dateTimeWithoutTimezoneFormat);
+            LocalDateTime thatDateTime = LocalDateTime.parse(that.datetime, dateTimeWithoutTimezoneFormat);
+
+            return dateTimeCompare(thisDateTime, thatDateTime);
+        }
+
+    }
+
+    //helper method for CompareTo in Comparable<Bid, Ask, Trades>
+    static private int dateTimeCompare(LocalDateTime thisDateTime, LocalDateTime thatDateTime) {
+
+        int thisYear = thisDateTime.getYear();
+        int thatYear = thatDateTime.getYear();
+        int thisMonth = thisDateTime.getMonthValue();
+        int thatMonth = thatDateTime.getMonthValue();
+        int thisDay = thisDateTime.getDayOfMonth();
+        int thatDay = thatDateTime.getDayOfMonth();
+        int thisHour = thisDateTime.getHour();
+        int thatHour = thatDateTime.getHour();
+        int thisMinute = thisDateTime.getMinute();
+        int thatMinute = thatDateTime.getMinute();
+        int thisSecond = thisDateTime.getSecond();
+        int thatSecond = thatDateTime.getSecond();
+
+        if (thisYear == thatYear && thisMonth == thatMonth && thisDay == thatDay) { //same dates, intraday comparison
+            if (thisHour > thatHour) {
+                return 1;
+            } else if (thisHour < thatHour) {
+                return -1;
+            } else { //same hour
+                if (thisMinute > thatMinute) { 
+                    return 1;
+                } else if (thisMinute < thatMinute) {
+                    return -1;
+                } else { //same hour and minute
+                    if (thisSecond > thatSecond) {
+                        return 1;
+                    } else {
+                        return -1;
+                    }
+                }
+            }
+
+        } else { //different dates
+            if (thisYear > thatYear) {
+                return 1;
+            } else if (thisYear < thatYear) {
+                return -1;
+            } else { //same year
+                if (thisMonth > thatMonth) {
+                    return 1;
+                } else if (thisMonth < thatMonth) {
+                    return -1;
+                } else { //same year and month
+                    if (thisDay > thatDay) {
+                        return 1;
+                    } else {
+                        return -1;
+                    }
+                }
+            }
+        } 
     }
 
     //all irrelevant EWrapper interface callback functions, left empty
