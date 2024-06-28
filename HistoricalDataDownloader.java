@@ -1,21 +1,25 @@
 import com.ib.client.*;
 import java.util.stream.*;
+import java.util.Scanner;
 import java.util.List;
 import java.util.ArrayList;
 import java.util.Set;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Map.Entry;
+import java.util.regex.*;
+import java.time.*;
 import java.time.format.DateTimeFormatter;
-import java.time.LocalDateTime;
-import java.time.ZonedDateTime;
-import java.time.ZoneId;
 import java.io.IOException;
 
 
 public class HistoricalDataDownloader implements EWrapper {
 
+    //the singleton instance of this class
+    private static HistoricalDataDownloader downloader;
+
     //static variables
-    private static final int portNumber = 7496; 
+    private static final int portNumber = 7496; //input port number here, 7696 for live/production account, 7497 for paper account
     private static final DateTimeFormatter dateTimeWithTimezoneFormat = DateTimeFormatter.ofPattern("yyyyMMdd HH:mm:ss VV"); //format for intraday data with timezone, VV for timezone
     private static final DateTimeFormatter dateTimeWithoutTimezoneFormat = DateTimeFormatter.ofPattern("yyyyMMdd HH:mm:ss"); //format for intraday data without timezone, VV for timezone
     private static final DateTimeFormatter dateFormat = DateTimeFormatter.ofPattern("yyyyMMdd"); //format for non-intraday data 
@@ -24,13 +28,13 @@ public class HistoricalDataDownloader implements EWrapper {
     private static final Set<Integer> nonErrorCodes = Set.of(2104, 2106, 2158); //IB error codes representing data connection notifications rather than actual errors, shall be ignored
     //API connection handles
     private EClientSocket client; //socket obj to send TWS requests
-    private EReaderSignal readerSignal; 
-    private EReader reader; //reader thread obj, to handle message queue I/O  
+    private EReaderSignal readerSignal; //sends signals to reader on message queue status
+    private EReader reader; //reader obj to handle message queue, EReader extends Thread and has run()
     //request parameters
     private Contract contract = new Contract(); //IBKR Contract obj
     private String ticker; 
     private String reqEndDateTime; 
-    private String reqLookbackWindow; //from end datetime, how long to retrieve
+    private String reqPeriod; //from end datetime, how long to retrieve
     private String reqBarSize; //data granularity
     //processing, result, other variables
     private boolean isBidRequestDone = false; //flag to mark end of bid request
@@ -46,26 +50,35 @@ public class HistoricalDataDownloader implements EWrapper {
     /*
     Constructor, setting instance variables to the request parameters
     */
-    public HistoricalDataDownloader(String ticker, String reqEndDateTime, String reqLookbackWindow, String reqBarSize) {
+    private HistoricalDataDownloader(String ticker, String reqEndDateTime, String reqPeriod, String reqBarSize) {
         this.ticker = ticker;
         this.reqEndDateTime = reqEndDateTime;
-        this.reqLookbackWindow = reqLookbackWindow;
+        this.reqPeriod = reqPeriod;
         this.reqBarSize = reqBarSize;
     }
+
+    /*
+    global instantiation point for this class instance
+    */
+    public static HistoricalDataDownloader getDownloader(String ticker, String reqEndDateTime, String reqPeriod, String reqBarSize) {
+        if (downloader == null) {
+            downloader = new HistoricalDataDownloader(ticker, reqEndDateTime, reqPeriod, reqBarSize);
+        }
+        return downloader;
+    }
     
-    public static void main (String[] args) {
+    public static void main (String[] args) throws IllegalArgumentException, NumberFormatException {
 
-        //initialize request parameters
-        String dateTime = makeDateTime(2024, 6, 21);
+        Map<String, String> parameters = readCmdInputs(); //get contract parameters from cmd
 
-        HistoricalDataDownloader downloader = new HistoricalDataDownloader("NVDA", dateTime, "1 D", "1 hour");
-        downloader.openConnection(portNumber);
+        downloader = getDownloader( parameters.get("ticker"), parameters.get("dateTime"), parameters.get("period"), parameters.get("barSize") );
+        downloader.openConnection(portNumber); 
         
         downloader.request(PriceDataType.BID, 1);
         downloader.request(PriceDataType.ASK, 2);
         downloader.request(PriceDataType.TRADES, 3);
 
-        while ( !downloader.isBidRequestDone || !downloader.isAskRequestDone || !downloader.isTradesRequestDone  ) { //
+        while ( !downloader.isBidRequestDone || !downloader.isAskRequestDone || !downloader.isTradesRequestDone  ) { //loop until all requests are completed
 
             downloader.readerSignal.waitForSignal();
 
@@ -83,8 +96,109 @@ public class HistoricalDataDownloader implements EWrapper {
         System.out.println(downloader.askResultBuilder.toString());
         System.out.println("Trades are:");
         System.out.println(downloader.tradesResultBuilder.toString());
-        System.exit(0);
-   
+        downloader.closeConnection();
+        
+    }
+
+    /*
+    Utility function to help read user cmd inputs <ticker, endDateTime, period, barSize> and return as Map
+    */
+    private static Map<String, String> readCmdInputs() {
+
+        String ticker;
+        String dateTime;
+        int year;
+        int month;
+        int day;
+        String duration; //user input
+        String durationDigit; //digit part
+        String durationUnit; //ex-digit part
+        String durationString; //converted to API string
+        String period; //re-concatenated
+        String interval; //user input
+        String intervalDigit; //digit part
+        String intervalUnit; //ex-digit part
+        String intervalString; //converted to API string
+        String barSize; //re-concatenated
+        final Pattern inputPattern = Pattern.compile("(\\d+)(\\D+)"); //regex to split request into digit and character groups, like 100 day -> (100)( day)
+        Matcher regexMatcher;
+
+        Scanner scanner = new Scanner(System.in);
+    
+        //ticker read
+        System.out.println("Enter ticker: ");
+        ticker = scanner.nextLine().trim().toUpperCase();
+        if ( ticker.length() == 0 || ticker.length() > 4 || ticker.contains(" ") ) {
+            throw new IllegalArgumentException("Invalid ticker.");
+        }
+        //datetime read
+        try {
+            System.out.println("Enter request end year: ");
+            year = Integer.valueOf( scanner.nextLine().trim() );
+            System.out.println("Enter request end month: ");
+            month = Integer.valueOf( scanner.nextLine().trim() );
+            System.out.println("Enter request end day: ");
+            day = Integer.valueOf( scanner.nextLine().trim() );
+            if ( day < 1 || day > 31 || month < 1 || month > 12 || year > Year.now().getValue() || year < Year.now().getValue()-2 ) {
+                throw new IllegalArgumentException("Invalid input date.");
+            }
+        } catch (NumberFormatException err) {
+            throw new NumberFormatException("Invalid input date."); //cannot parse to int
+        }
+        dateTime = makeDateTime(year, month, day);
+        //period read
+        System.out.println("Enter data request period (such as 5 days, 1 week): ");
+        duration = scanner.nextLine().trim();
+        regexMatcher = inputPattern.matcher(duration); //match input to regex
+        if (!regexMatcher.matches()) {
+            throw new IllegalArgumentException("Invalid request period format.");
+        }
+        durationDigit = regexMatcher.group(1); //the number portion
+        durationUnit = regexMatcher.group(2).trim().toLowerCase(); //after the number portion
+        if (durationUnit.contains("day")) {
+            durationString = "D";
+        } else if (durationUnit.contains("week")) {
+            durationString = "W";
+        } else if (durationUnit.contains("month")) {
+            durationString = "M";
+        } else if (durationUnit.contains("year")) {
+            durationString = "Y";
+        } else {
+            throw new IllegalArgumentException("Could not identify period requested.");
+        }
+        period = durationDigit + " " + durationString;
+        //read barsize
+        System.out.println("Enter data interval (such as 1 minute, 2 hours, 1 day): ");
+        interval = scanner.nextLine().trim();
+        regexMatcher = inputPattern.matcher(interval); //match input to regex
+        if (!regexMatcher.matches()) {
+            throw new IllegalArgumentException("Invalid request bar size format.");
+        }
+        intervalDigit = regexMatcher.group(1); //the number portion
+        intervalUnit = regexMatcher.group(2).trim().toLowerCase(); //after the number portion
+        if ( intervalUnit.contains("sec") ) {
+            intervalString = "secs";
+        } else if ( intervalUnit.contains("min") ) {
+            intervalString = "mins";
+        } else if ( intervalUnit.contains("hour") || intervalUnit.contains("hr") ) {
+            intervalString = "hours";
+        } else if ( intervalUnit.contains("day") ) {
+            intervalString = "day";
+        } else if ( intervalUnit.contains("week") || intervalUnit.contains("wk") ) {
+            intervalString = "week";
+        } else if ( intervalUnit.contains("year") || intervalUnit.contains("yr") ) {
+            intervalString = "year";
+        } 
+        else {
+            throw new IllegalArgumentException("Could not identify bar interval requested.");
+        }
+        if ( intervalDigit.equals("1") && intervalString.charAt(intervalString.length()-1) == "s".charAt(0) ) { //when digit is 1 and last string char is 's'
+            intervalString = intervalString.substring(0, intervalString.length()-1); //remove the 's'
+        }
+        barSize = intervalDigit + " " + intervalString;
+
+        return Stream.of(new String[][] { {"ticker", ticker}, {"dateTime", dateTime}, {"period", period}, {"barSize", barSize}} ).collect(Collectors.toMap(el -> el[0], el -> el[1]));
+
     }
 
     /*
@@ -131,7 +245,7 @@ public class HistoricalDataDownloader implements EWrapper {
     */
     private void request(PriceDataType reqDataType, int reqId) {
         this.setContract();
-        this.client.reqHistoricalData(reqId, this.contract, this.reqEndDateTime, this.reqLookbackWindow, this.reqBarSize, reqDataType.name(), 1, 1, false, null);
+        this.client.reqHistoricalData(reqId, this.contract, this.reqEndDateTime, this.reqPeriod, this.reqBarSize, reqDataType.name(), 1, 1, false, null);
     }
 
     private void request() { //overloaded no arg-request
@@ -227,29 +341,6 @@ public class HistoricalDataDownloader implements EWrapper {
         BID, 
         ASK,
         TRADES
-    }
-
-    /*
-    API can connect to the live/production account for actual trading or paper account for testing, live and paper accounts use ports 7496 and 7497
-    */
-    private enum LoginAccountType {
-        LIVE, 
-        PAPER;
-
-        //return the corresponding port number as string
-        @Override 
-        public String toString() {
-            String portNumber = switch(this) {
-                case LIVE -> "7496";
-                case PAPER -> "7497";
-            };
-            return portNumber;
-        }
-
-        //return the corresponding port number as int
-        public int getPort() {
-            return Integer.valueOf(this.toString());
-        }
     }
 
     //Data object for bid price data

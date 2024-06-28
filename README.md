@@ -1,10 +1,13 @@
 ## IB TWS API Historical Data Download
 
-Codes to download US single stock historical data using IB TWS API.  
+Codes to download **US single stock** historical data using IB TWS API.  
 
 #### Needs
 - [Interactive Brokers TWS API](https://ibkrcampus.com/ibkr-api-page/twsapi-doc/#find-the-api)
 - Java8+
+
+#### How to Use
+
 
 #### Input parameters
 - Stock ticker
@@ -19,7 +22,7 @@ Codes to download US single stock historical data using IB TWS API.
 #### Comments
 - All times are defaulted to America/New York, 9:30 to 15:59
 - Bid and ask prices are open prices at that timestamp
-- Traded prices represent first traded prices in the period; If 14:50:00 and for 1-min data, then it is the first price traded between 14:50:00 and 14:51:00
+- Traded prices represent first traded prices in the period; for example, in case of 1-min data, the traded at 14:50:00 is the first price traded at between 14:50:00 and 14:51:00 and volume is for that minute
 
 #### API Limitations and Workarounds
 - Because request data types are seperated into bid, ask, and traded prices and only one can be sent per request, requests have to be repeatedly sent. The seperate data are joined after checking for timestamps.
@@ -27,8 +30,7 @@ Codes to download US single stock historical data using IB TWS API.
 - Maximum 10 simultaneous requests.
 
 #### Logic Overview
-- One class
-- Using only one instance to connect to TWS and perform all requests using different request identifiers (reqId)
+- One class (singleton), whose instance used to connect to TWS and perform all requests using different request identifiers (reqId)
 - EReader listens to incoming messages and pushes all messages into the queue
 - Built-in `EReader.processMsgs()` then called to pass received data and tagged reqId to relevant callback `HistoricalData()`
 - `HistoricalData` is called repeatedly for every message (data point) in a request, related callback `HistoricalDataEnd()` is called when all messages of a request are sent
@@ -36,3 +38,6 @@ Codes to download US single stock historical data using IB TWS API.
 - Stay in listening loop until all request flags signal completion
 - Accumulate messages into a queue (LinkedList) for each request
 - Combine data points in queues after checking/matching timestamps, output combined result
+
+#### Future Works
+- Expand to non-equity contracts, especially FX and futures
