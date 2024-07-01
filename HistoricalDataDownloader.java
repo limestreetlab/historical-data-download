@@ -33,13 +33,14 @@ public class HistoricalDataDownloader implements EWrapper {
     private String reqPeriod; //from end datetime, how long to retrieve
     private String reqBarSize; //data granularity
     //processing, result, other variables
+    private boolean isIntraday; //flag to indicate if data request is intraday or interday
     private boolean isBidRequestDone = false; //flag to mark end of bid request
     private boolean isAskRequestDone = false; //flag to mark end of ask request
     private boolean isTradesRequestDone = false; //flag to mark end of trades request
     private Queue<Bid> bids = new LinkedList<>(); //container to accumulate Bid objs
     private Queue<Ask> asks = new LinkedList<>(); //container to accumulate Ask objs
     private Queue<Trades> trades = new LinkedList<>(); //container to accumulate Trades objs
-    private Queue<HistoricalData> data = new LinkedList<>();
+    private Queue<BidAskTrades> bidsAsksTrades = new LinkedList<>(); //container to join bids,asks,trades for intraday
 
     /*
     Constructor, setting instance variables to the request parameters
@@ -49,6 +50,7 @@ public class HistoricalDataDownloader implements EWrapper {
         this.reqEndDateTime = reqEndDateTime;
         this.reqPeriod = reqPeriod;
         this.reqBarSize = reqBarSize;
+        this.isIntraday = Arrays.stream(new String[]{"sec", "min", "hour"}).anyMatch(reqBarSize::contains) ? true : false; //flag raised for intraday request
     }
 
     /*
@@ -69,7 +71,7 @@ public class HistoricalDataDownloader implements EWrapper {
         String barSize = null;
 
         try {
-            Map<String, String> parameters = readCmdInputs(); //get contract parameters from cmd
+            Map<String, String> parameters = readCmdInputs(); //get contract parameters from cmd, then assign
             ticker = parameters.get("ticker");
             dateTime = parameters.get("dateTime");
             period =  parameters.get("period");
@@ -80,27 +82,39 @@ public class HistoricalDataDownloader implements EWrapper {
             System.exit(0);
         }
 
-        downloader = getDownloader(ticker, dateTime, period, barSize);
-        downloader.openConnection(portNumber); 
-        
-        downloader.request(PriceDataType.BID, 1);
-        downloader.request(PriceDataType.ASK, 2);
-        downloader.request(PriceDataType.TRADES, 3);
+        downloader = getDownloader(ticker, dateTime, period, barSize); //construct download instance 
+        downloader.openConnection(portNumber); //connect to TWS server
 
-        while ( !downloader.isBidRequestDone || !downloader.isAskRequestDone || !downloader.isTradesRequestDone  ) { //loop until all requests are completed
+        //submit request(s) to server, with predetermined (arbitrarily) IDs for each type
+        if (downloader.isIntraday) { //intraday case
+            downloader.request(PriceDataType.TRADES, 1); 
+            downloader.request(PriceDataType.BID, 2);
+            downloader.request(PriceDataType.ASK, 3);
+        } else { //interday case
+            downloader.request(PriceDataType.TRADES, 1); 
+            downloader.isBidRequestDone = true; //no bid and ask requests
+            downloader.isAskRequestDone = true;
+        }
+        
+        while ( !downloader.isBidRequestDone || !downloader.isAskRequestDone || !downloader.isTradesRequestDone  ) { //loop until request(s) completed
 
             downloader.readerSignal.waitForSignal();
 
             try {
-                downloader.reader.processMsgs(); 
+                downloader.reader.processMsgs(); //trigger callback
             } catch (IOException err) {
                 System.out.println("Error occurred during data read: " + err.getMessage());
             }
 
+        } //all request messages received and processed
+
+        if (downloader.isIntraday) {
+            downloader.joinBidAskTrades();
+            downloader.bidsAsksTrades.stream().forEach( x -> System.out.print(x));
+        } else {
+            downloader.trades.stream().forEach( x -> System.out.print(x));
         }
 
-        downloader.joinBidAskTrades();
-        downloader.data.stream().forEach( x -> System.out.print(x));
         downloader.closeConnection();
         
     }
@@ -111,8 +125,8 @@ public class HistoricalDataDownloader implements EWrapper {
     */
     private static Map<String, String> readCmdInputs() throws IllegalArgumentException {
 
-        String ticker;
-        String dateTime;
+        String ticker = null;
+        String dateTime = null;
         int year;
         int month;
         int day;
@@ -152,7 +166,12 @@ public class HistoricalDataDownloader implements EWrapper {
         } catch (NumberFormatException err) {
             throw new NumberFormatException("Invalid input date."); //cannot parse to int
         }
-        dateTime = makeDateTime(year, month, day);
+        try {
+            dateTime = makeDateTime(year, month, day);
+        } catch (IllegalArgumentException err) {
+            System.out.println(err.getMessage());
+            System.exit(0);
+        }
         //period read
         System.out.println("Enter data request period (such as 5 days, 1 week): ");
         duration = scanner.nextLine().trim();
@@ -162,13 +181,13 @@ public class HistoricalDataDownloader implements EWrapper {
         }
         durationDigit = regexMatcher.group(1); //the number portion
         durationUnit = regexMatcher.group(2).trim().toLowerCase(); //after the number portion
-        if (durationUnit.contains("day")) {
+        if (durationUnit.contains("day") || durationUnit.substring(0,1).equals("d")) {
             durationString = "D";
-        } else if (durationUnit.contains("week")) {
+        } else if (durationUnit.contains("week") || durationUnit.substring(0,1).equals("w")) {
             durationString = "W";
-        } else if (durationUnit.contains("month")) {
+        } else if (durationUnit.contains("month") || durationUnit.substring(0,1).equals("m")) {
             durationString = "M";
-        } else if (durationUnit.contains("year")) {
+        } else if (durationUnit.contains("year") || durationUnit.substring(0,1).equals("y")) {
             durationString = "Y";
         } else {
             throw new IllegalArgumentException("Could not identify period requested.");
@@ -183,17 +202,17 @@ public class HistoricalDataDownloader implements EWrapper {
         }
         intervalDigit = regexMatcher.group(1); //the number portion
         intervalUnit = regexMatcher.group(2).trim().toLowerCase(); //after the number portion
-        if ( intervalUnit.contains("sec") ) {
+        if ( intervalUnit.contains("sec") || intervalUnit.substring(0,1).equals("s") ) {
             intervalString = "secs";
-        } else if ( intervalUnit.contains("min") ) {
+        } else if ( intervalUnit.contains("min") || intervalUnit.substring(0,1).equals("m") ) {
             intervalString = "mins";
-        } else if ( intervalUnit.contains("hour") || intervalUnit.contains("hr") ) {
+        } else if ( intervalUnit.contains("hour") || intervalUnit.contains("hr") || intervalUnit.substring(0,1).equals("h") ) {
             intervalString = "hours";
-        } else if ( intervalUnit.contains("day") ) {
+        } else if ( intervalUnit.contains("day") || intervalUnit.substring(0,1).equals("d") ) {
             intervalString = "day";
-        } else if ( intervalUnit.contains("week") || intervalUnit.contains("wk") ) {
+        } else if ( intervalUnit.contains("week") || intervalUnit.contains("wk") || intervalUnit.substring(0,1).equals("w") ) {
             intervalString = "week";
-        } else if ( intervalUnit.contains("year") || intervalUnit.contains("yr") ) {
+        } else if ( intervalUnit.contains("year") || intervalUnit.contains("yr") || intervalUnit.substring(0,1).equals("y") ) {
             intervalString = "year";
         } 
         else {
@@ -216,8 +235,14 @@ public class HistoricalDataDownloader implements EWrapper {
     /*
     @return string in IBAPI dateTime format with timezone specified
     */
-    static private String makeDateTime(int year, int month, int day) {
-        ZonedDateTime dateTime = ZonedDateTime.of(year, month, day, 16, 0, 0, 0, timezone); //creating a ZonedDateTime obj
+    static private String makeDateTime(int year, int month, int day) throws IllegalArgumentException {
+        ZonedDateTime dateTime = null;
+        try {
+            dateTime = ZonedDateTime.of(year, month, day, 16, 0, 0, 0, timezone); //creating a ZonedDateTime obj
+        } 
+        catch (DateTimeException err) {
+            throw new IllegalArgumentException("Invalid date input.");
+        }
         return dateTime.format(dateTimeWithTimezoneFormat); //format to string
     }
 
@@ -278,19 +303,32 @@ public class HistoricalDataDownloader implements EWrapper {
     @Override
     public void historicalData(int reqId, Bar candlestick) throws IllegalArgumentException {
 
-        String datetimestamp = (Arrays.stream(new String[]{"sec", "min", "hour"}).anyMatch(this.reqBarSize::contains)) ? removeTimezone(candlestick.time().trim()) : candlestick.time().trim(); //remove timezone only if requested barsize is of intraday timescale
-        double price = candlestick.open();
-        int volume = 0;
+        String datetimestamp = this.isIntraday ? removeTimezone(candlestick.time().trim()) : candlestick.time().trim(); //remove timezone only if requested barsize is of intraday timescale
+        double open = 0;
+        double high = 0;
+        double low = 0;
+        double close = 0;
+        double bid = 0;
+        double ask = 0;
+        long volume = 0;
 
-        if (reqId == 3) {
-            volume = (int)candlestick.volume().longValue();
-        } 
+        if (reqId == 2) { //message is for bid
+            bid = candlestick.open();
+        } else if (reqId == 3) { //message is for ask
+            ask = candlestick.open();
+        } else {  //message is for trades
+            open = candlestick.open();
+            high = candlestick.high();
+            low = candlestick.low();
+            close = candlestick.close();
+            volume = candlestick.volume().longValue(); //volume is of a IBAPI-defined Decimal type
+        }
 
         switch (reqId) {
-            case 1 -> this.bids.add(new Bid(datetimestamp, price));
-            case 2 -> this.asks.add(new Ask(datetimestamp, price));
-            case 3 -> this.trades.add(new Trades(datetimestamp, price, volume));
-            default -> throw new IllegalArgumentException("Unable to recognise request ID to identify request price type, failed to allocate data.");
+            case 1 -> this.trades.add(new Trades(datetimestamp, open, high, low, close, volume));
+            case 2 -> this.bids.add(new Bid(datetimestamp, bid));
+            case 3 -> this.asks.add(new Ask(datetimestamp, ask));
+            default -> throw new IllegalArgumentException("Unable to recognise request ID to tag price type, failed to allocate message.");
         }
 
     }
@@ -301,9 +339,9 @@ public class HistoricalDataDownloader implements EWrapper {
     @Override
     public void historicalDataEnd(int reqId, String startDateStr, String endDateStr) throws IllegalArgumentException {
         switch (reqId) {
-            case 1 -> this.isBidRequestDone = true; 
-            case 2 -> this.isAskRequestDone = true;
-            case 3 -> this.isTradesRequestDone = true;
+            case 1 -> this.isTradesRequestDone = true; //used 1, 2, 3 for trades, bid, ask requests, respectively
+            case 2 -> this.isBidRequestDone = true;
+            case 3 -> this.isAskRequestDone = true;
             default -> throw new IllegalArgumentException("Unable to recognise request ID in identifying request price type.");
         }
     }
@@ -348,47 +386,74 @@ public class HistoricalDataDownloader implements EWrapper {
         BID_ASK
     }
 
-    private record Bid(String datetime, double price) {
+    private record Bid(String datetime, double bid) {
     }
 
-    private record Ask(String datetime, double price) {
+    private record Ask(String datetime, double ask) {
     }
 
-    private record Trades(String datetime, double price, int volume) {
-    }
+    private record Trades(String datetime, double open, double high, double low, double close, long volume) implements Comparable<Trades> {
 
-    //data object to hold Bid, Ask, and Trades custom types
-    private record HistoricalData(Bid bid, Ask ask, Trades trades) implements Comparable<HistoricalData> {
+        @Override   //show datetime, open, high, low, close, volume
+        public String toString() { 
+            String[] data = {this.datetime, String.valueOf(this.open), String.valueOf(this.high), String.valueOf(this.low), String.valueOf(this.close), String.valueOf(this.volume)};
+            return (Stream.of(data).collect(Collectors.joining(", ")) + lineDelimiter); //csv format
+        }
 
         @Override   //obj A is considered larger than B if its datetime is after that of B (ie recent data is larger)
-        public int compareTo(HistoricalData that) { 
+        public int compareTo(Trades that) { 
             Temporal thisTimestamp;
             Temporal thatTimestamp;
             
-            if ( this.bid.datetime().equals(that.bid.datetime()) ) {
+            if ( this.datetime.equals(that.datetime()) ) {
                 return 0;
             }
 
-            if ( this.bid.datetime().length() == 8 ) { //interday data yyyymmdd
-                thisTimestamp = LocalDate.parse(this.bid.datetime(), dateFormat);
+            if ( this.datetime.length() == 8 ) { //interday data yyyymmdd
+                thisTimestamp = LocalDate.parse(this.datetime, dateFormat);
+                thatTimestamp = LocalDate.parse(that.datetime(), dateFormat);
+            } else { //intraday data
+                thisTimestamp = LocalDateTime.parse(this.datetime, dateTimeWithoutTimezoneFormat);
+                thatTimestamp = LocalDateTime.parse(that.datetime(), dateTimeWithoutTimezoneFormat);
+            }
+
+            return dateTimeCompare(thisTimestamp, thatTimestamp);
+        }
+
+    }
+
+    //data object to hold Bid, Ask, and Trades custom types
+    private record BidAskTrades(Bid bid, Ask ask, Trades trades) implements Comparable<BidAskTrades> {
+
+        @Override   //obj A is considered larger than B if its datetime is after that of B (ie recent data is larger)
+        public int compareTo(BidAskTrades that) { 
+            Temporal thisTimestamp;
+            Temporal thatTimestamp;
+            
+            if ( this.bid.datetime.equals(that.bid.datetime()) ) {
+                return 0;
+            }
+
+            if ( this.bid.datetime.length() == 8 ) { //interday data yyyymmdd
+                thisTimestamp = LocalDate.parse(this.bid.datetime, dateFormat);
                 thatTimestamp = LocalDate.parse(that.bid.datetime(), dateFormat);
             } else { //intraday data
-                thisTimestamp = LocalDateTime.parse(this.bid.datetime(), dateTimeWithoutTimezoneFormat);
+                thisTimestamp = LocalDateTime.parse(this.bid.datetime, dateTimeWithoutTimezoneFormat);
                 thatTimestamp = LocalDateTime.parse(that.bid.datetime(), dateTimeWithoutTimezoneFormat);
             }
 
             return dateTimeCompare(thisTimestamp, thatTimestamp);
         }
 
-        @Override   //show datetime, bid, ask, traded, volume
+        @Override   //show datetime, bid, ask, open, high, low, close, volume
         public String toString() { 
-            String[] data = {this.bid.datetime(), String.valueOf(this.bid.price()), String.valueOf(this.ask.price()), String.valueOf(this.trades.price()), String.valueOf(this.trades.volume())};
+            String[] data = {this.bid.datetime, String.valueOf(this.bid.bid), String.valueOf(this.ask.ask), String.valueOf(this.trades.open), String.valueOf(this.trades.high), String.valueOf(this.trades.low), String.valueOf(this.trades.close), String.valueOf(this.trades.volume)};
             return (Stream.of(data).collect(Collectors.joining(", ")) + lineDelimiter); //csv format
         }
 
     }
 
-    //combine the bids, asks, and trades data queues into a queue of historicaldata type
+    //combine the bids, asks, and trades data queues
     private void joinBidAskTrades() throws ArrayIndexOutOfBoundsException {
         if ( !(this.bids.size() == this.asks.size() && this.asks.size() == this.trades.size()) ) {
             throw new ArrayIndexOutOfBoundsException("Retrieved bids, asks, and trades data are of unequal lengths/sizes.");
@@ -397,12 +462,12 @@ public class HistoricalDataDownloader implements EWrapper {
         for (Bid bid: this.bids) {
             Ask ask = this.asks.remove();
             Trades trade = this.trades.remove();
-            this.data.add(new HistoricalData(bid, ask, trade));
+            this.bidsAsksTrades.add(new BidAskTrades(bid, ask, trade));
         }
 
     }
 
-    //helper method for CompareTo in Comparable<HistoricalData>
+    //helper method for CompareTo in Comparable<>
     static private int dateTimeCompare(Temporal dateTime1, Temporal dateTime2) {
         int thisYear;
         int thatYear;
