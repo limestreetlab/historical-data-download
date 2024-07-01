@@ -1,9 +1,9 @@
 ## IB TWS API Historical Data Download
 
-Codes to download <u>US single stock</u> historical data using IB TWS API.  
+Codes to download **US single stock** historical data using IB TWS API.  
 
 #### Needs
-- [Interactive Brokers TWS API](https://ibkrcampus.com/ibkr-api-page/twsapi-doc/#find-the-api) (source/JavaClient/com)
+- [Interactive Brokers TWS API](https://ibkrcampus.com/ibkr-api-page/twsapi-doc/#find-the-api), (source/JavaClient/com)
 - Java8+
 
 #### How to Use
@@ -43,7 +43,7 @@ Codes to download <u>US single stock</u> historical data using IB TWS API.
 - Data are accumulated into a data structure inside `HistoricalData` callback
 - Flag `isDone` used to track if all messages are received as signaled by `HistoricalDataEnd`, until then keep looping
 - `isIntraday` flag for intraday or interday data request
-- Because IBKR bid, ask, and trades data require one request each, intraday data need to send 3 separate requests, of different ids, and results pushed into 3 containers to be combined into one at the end
+- Because IBKR bid, ask, and trades data require one request each, intraday data need to send 3 separate requests, of different (arbritarily assigned) ids, and results pushed into 3 containers to be combined into one at the end
 - Interday data come only from TRADES request, so uses only one container
 - Custom data types Bid, Ask, Trades defined, with compareTo and toString overriden
 - IB data feed is chronological, so synchronous saving of custom data is in natural order already; but Comparable<Trades> makes possible to sort Trades type based on datetime

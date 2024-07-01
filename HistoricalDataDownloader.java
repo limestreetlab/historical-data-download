@@ -63,15 +63,15 @@ public class HistoricalDataDownloader implements EWrapper {
         return downloader;
     }
     
-    public static void main (String[] args) throws IllegalArgumentException, NumberFormatException {
+    public static void main (String[] args) throws IllegalArgumentException, NumberFormatException, IOException {
 
         String ticker = null;
         String dateTime = null;
         String period = null;
         String barSize = null;
 
-        try {
-            Map<String, String> parameters = readCmdInputs(); //get contract parameters from cmd, then assign
+        try { //get contract parameters from cmd, then assign
+            Map<String, String> parameters = readCmdInputs(); 
             ticker = parameters.get("ticker");
             dateTime = parameters.get("dateTime");
             period =  parameters.get("period");
@@ -83,40 +83,48 @@ public class HistoricalDataDownloader implements EWrapper {
         }
 
         downloader = getDownloader(ticker, dateTime, period, barSize); //construct download instance 
-        downloader.openConnection(portNumber); //connect to TWS server
+        downloader.start();
+        
+    }
+
+    /*
+    main method encapsulating all operations from connect and request to save and disconnect
+    */
+    public void start() throws IOException {
+
+        this.openConnection(portNumber); //connect to TWS server
 
         //submit request(s) to server, with predetermined (arbitrarily) IDs for each type
-        if (downloader.isIntraday) { //intraday case
-            downloader.request(PriceDataType.TRADES, 1); 
-            downloader.request(PriceDataType.BID, 2);
-            downloader.request(PriceDataType.ASK, 3);
+        if (this.isIntraday) { //intraday case
+            this.request(PriceDataType.TRADES, 1); 
+            this.request(PriceDataType.BID, 2);
+            this.request(PriceDataType.ASK, 3);
         } else { //interday case
-            downloader.request(PriceDataType.TRADES, 1); 
-            downloader.isBidRequestDone = true; //no bid and ask requests
-            downloader.isAskRequestDone = true;
+            this.request(PriceDataType.TRADES, 1); 
+            this.isBidRequestDone = true; //no bid and ask requests
+            this.isAskRequestDone = true; //no bid and ask requests
         }
-        
+
         while ( !downloader.isBidRequestDone || !downloader.isAskRequestDone || !downloader.isTradesRequestDone  ) { //loop until request(s) completed
 
             downloader.readerSignal.waitForSignal();
-
             try {
-                downloader.reader.processMsgs(); //trigger callback
+                this.reader.processMsgs(); //trigger callback
             } catch (IOException err) {
-                System.out.println("Error occurred during data read: " + err.getMessage());
+                throw new IOException(err);
             }
 
         } //all request messages received and processed
 
-        if (downloader.isIntraday) {
-            downloader.joinBidAskTrades();
-            downloader.bidsAsksTrades.stream().forEach( x -> System.out.print(x));
+        if (this.isIntraday) {
+            this.joinBidAskTrades();
+            this.bidsAsksTrades.stream().forEach( x -> System.out.print(x));
         } else {
-            downloader.trades.stream().forEach( x -> System.out.print(x));
+            this.trades.stream().forEach( x -> System.out.print(x));
         }
 
-        downloader.closeConnection();
-        
+        this.closeConnection();
+
     }
 
     /*
@@ -169,8 +177,7 @@ public class HistoricalDataDownloader implements EWrapper {
         try {
             dateTime = makeDateTime(year, month, day);
         } catch (IllegalArgumentException err) {
-            System.out.println(err.getMessage());
-            System.exit(0);
+            throw new IllegalArgumentException(err);
         }
         //period read
         System.out.println("Enter data request period (such as 5 days, 1 week): ");
