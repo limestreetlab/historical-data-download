@@ -18,7 +18,7 @@ public class HistoricalDataDownloader implements EWrapper {
     private static HistoricalDataDownloader downloader;
 
     //static variables
-    private static final int portNumber = 7496; //input port number here, 7696 for live/production account, 7497 for paper account
+    private static final int portNumber = 7497; //input port number here, 7696 for live/production account, 7497 for paper account
     private static final DateTimeFormatter dateTimeWithTimezoneFormat = DateTimeFormatter.ofPattern("yyyyMMdd HH:mm:ss VV"); //format for intraday data with timezone, VV for timezone
     private static final DateTimeFormatter dateTimeWithoutTimezoneFormat = DateTimeFormatter.ofPattern("yyyyMMdd HH:mm:ss"); //format for intraday data without timezone, VV for timezone
     private static final DateTimeFormatter dateFormat = DateTimeFormatter.ofPattern("yyyyMMdd"); //format for non-intraday data 
@@ -78,7 +78,7 @@ public class HistoricalDataDownloader implements EWrapper {
     @param String path: path to the directory where file will be saved
     */
     public static HistoricalDataDownloader getDownloader(String ticker, int endYear, int endMonth, int endDay, String reqPeriod, String reqBarSize, String dirPath) throws IllegalArgumentException {
-        String reqEndDateTime = makeDateTime(endYear, endMonth, endDay); //in valid datetime format
+        String reqEndDateTime = makeDateTime(endYear, endMonth, endDay); //convert to valid datetime format defined
        
         if (downloader == null) {
             downloader = new HistoricalDataDownloader(ticker, reqEndDateTime, reqPeriod, reqBarSize, dirPath);
@@ -125,6 +125,7 @@ public class HistoricalDataDownloader implements EWrapper {
     public void start() throws IOException {
 
         this.openConnection(portNumber); //connect to TWS server
+        this.setContract();
 
         //submit request(s) to server, with predetermined (arbitrarily) IDs for each type
         if (this.isIntraday) { //intraday case
@@ -148,8 +149,8 @@ public class HistoricalDataDownloader implements EWrapper {
 
         } //all request messages received and processed
 
-        this.saveData();
-        this.closeConnection();
+        this.saveData(); //save accumulated data to file
+        this.closeConnection(); 
 
     }
 
@@ -169,6 +170,7 @@ public class HistoricalDataDownloader implements EWrapper {
             this.joinBidAskTrades();
             writer.write("datetime, bid, ask, open, high, low, close, volume"); //csv header
             writer.newLine();
+            //stream the data from container to writer to write to file; must declare IOException but stream().forEach cannot throw checked Exceptions, wrap try catch inside forEach and recast to unchecked
             this.bidsAsksTrades.stream().forEach( line -> {
                                                             try {
                                                                 writer.write(line.toString());
@@ -307,7 +309,7 @@ public class HistoricalDataDownloader implements EWrapper {
     /*
     @return string in IBAPI dateTime format with timezone specified
     */
-    static public String makeDateTime(int year, int month, int day) throws IllegalArgumentException {
+    static private String makeDateTime(int year, int month, int day) throws IllegalArgumentException {
         ZonedDateTime dateTime = null;
         try {
             dateTime = ZonedDateTime.of(year, month, day, 16, 0, 0, 0, timezone); //creating a ZonedDateTime obj
@@ -353,7 +355,6 @@ public class HistoricalDataDownloader implements EWrapper {
     @see: https://ibkrcampus.com/ibkr-api-page/twsapi-doc/#requesting-historical-bars
     */
     private void request(PriceDataType reqDataType, int reqId) {
-        this.setContract();
         this.client.reqHistoricalData(reqId, this.contract, this.reqEndDateTime, this.reqPeriod, this.reqBarSize, reqDataType.name(), 1, 1, false, null);
     }
 
