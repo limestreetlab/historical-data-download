@@ -18,12 +18,11 @@ public class HistoricalDataDownloader implements EWrapper {
     private static HistoricalDataDownloader downloader;
 
     //static variables
-    private static final int portNumber = 7497; //input port number here, 7696 for live/production account, 7497 for paper account
+    private static final int portNumber = 7496; //input port number here, 7696 for live/production account, 7497 for paper account
     private static final DateTimeFormatter dateTimeWithTimezoneFormat = DateTimeFormatter.ofPattern("yyyyMMdd HH:mm:ss VV"); //format for intraday data with timezone, VV for timezone
     private static final DateTimeFormatter dateTimeWithoutTimezoneFormat = DateTimeFormatter.ofPattern("yyyyMMdd HH:mm:ss"); //format for intraday data without timezone, VV for timezone
     private static final DateTimeFormatter dateFormat = DateTimeFormatter.ofPattern("yyyyMMdd"); //format for non-intraday data 
     private static final ZoneId timezone = ZoneId.of("America/New_York"); //Java ZonedDateTime Class timezone obj, always use EST
-    private static final String lineDelimiter = System.lineSeparator(); //newline delimiter
     private static final Set<Integer> okErrorCodes = Set.of(2104, 2106, 2158); //IB error codes representing data connection notifications rather than actual errors, shall be ignored
     //API connection handles
     private EClientSocket client; //socket obj to send TWS requests
@@ -45,6 +44,7 @@ public class HistoricalDataDownloader implements EWrapper {
     private LinkedList<Trades> trades = new LinkedList<>(); //container to accumulate Trades objs
     private LinkedList<BidAskTrades> bidsAsksTrades = new LinkedList<>(); //container to join bids,asks,trades for intraday
     private Path dirPath; //path to the directory to save this data file
+    private boolean withHeader; //if csv output with headers or not
 
     /*
     Constructor, setting instance variables to the request parameters
@@ -76,16 +76,23 @@ public class HistoricalDataDownloader implements EWrapper {
     @param String period: "<digit> DurationString" where DurationString is S = seconds, D = day, W = week, M = month, Y = year
     @param String dataSize: "<digit> SizeString", valid strings are <1/5/10/15/30> secs, <1/2/3/5/10/15/20/30> mins, <1/2/3/4/8> hours, <1> day/week/month; note 1 min and 1 hour (no s)
     @param String path: path to the directory where file will be saved
+    @param bool withHeader: true to write headers to csv data, false without
     */
-    public static HistoricalDataDownloader getDownloader(String ticker, int endYear, int endMonth, int endDay, String reqPeriod, String reqBarSize, String dirPath) throws IllegalArgumentException {
+    public static HistoricalDataDownloader getDownloader(String ticker, int endYear, int endMonth, int endDay, String reqPeriod, String reqBarSize, String dirPath, boolean withHeader) throws IllegalArgumentException {
         String reqEndDateTime = makeDateTime(endYear, endMonth, endDay); //convert to valid datetime format defined
        
         if (downloader == null) {
             downloader = new HistoricalDataDownloader(ticker, reqEndDateTime, reqPeriod, reqBarSize, dirPath);
         }
+
+        downloader.withHeader = withHeader ? true : false;
         
         return downloader;
     }
+    public static HistoricalDataDownloader getDownloader(String ticker, int endYear, int endMonth, int endDay, String reqPeriod, String reqBarSize, String dirPath) throws IllegalArgumentException {
+        return getDownloader(ticker, endYear, endMonth, endDay, reqPeriod, reqBarSize, dirPath, true);
+    }
+    
     
     public static void main (String[] args) throws IllegalArgumentException, NumberFormatException, IOException {
 
@@ -154,44 +161,39 @@ public class HistoricalDataDownloader implements EWrapper {
 
     }
 
-    private void saveData() throws IOException, UncheckedIOException {
+    private void saveData() throws IOException {
         
         String filename;
         Path filePath; 
-        BufferedWriter writer;
         String firstDate = this.trades.peek().datetime.substring(0, 8); 
         String lastDate = this.trades.peekLast().datetime.substring(0, 8); 
 
         filename = this.ticker + " " + this.reqBarSize.replaceAll("\\s", "") + " " + firstDate + "-" + lastDate + ".csv";
         filePath = this.dirPath.resolve(filename);
-        writer = Files.newBufferedWriter(filePath); 
-        
-        if (this.isIntraday) {
-            this.joinBidAskTrades();
-            writer.write("datetime, bid, ask, open, high, low, close, volume"); //csv header
-            writer.newLine();
-            //stream the data from container to writer to write to file; must declare IOException but stream().forEach cannot throw checked Exceptions, wrap try catch inside forEach and recast to unchecked
-            this.bidsAsksTrades.stream().forEach( line -> {
-                                                            try {
-                                                                writer.write(line.toString());
-                                                            } catch (IOException err) {
-                                                                throw new UncheckedIOException(err); //must cast IOException (checked) to an unchecked one as checked exceptions cannot occur in forEach
-                                                            }
-                                                        });  
-            } 
-        else {
-            writer.write("datetime, open, high, low, close, volume"); //csv header
-            writer.newLine();
-            this.trades.stream().forEach( line -> {
-                                                    try {
-                                                        writer.write(line.toString());
-                                                    } catch (IOException err) {
-                                                        throw new UncheckedIOException(err); //must cast IOException (checked) to an unchecked one as checked exceptions cannot occur in forEach
-                                                    }
-                                                });
-        }
 
-        writer.close();
+        try (BufferedWriter writer = Files.newBufferedWriter(filePath)) {
+        
+            if (this.isIntraday) {
+                this.joinBidAskTrades();
+                if (this.withHeader) {
+                    writer.write("datetime, bid, ask, open, high, low, close, volume"); //csv header
+                    writer.newLine();
+                }
+                for (BidAskTrades line : this.bidsAsksTrades) {
+                    writer.write(line.toString() + System.lineSeparator());
+                }   
+            } else {
+                if (this.withHeader) {
+                    writer.write("datetime, open, high, low, close, volume"); //csv header
+                    writer.newLine();
+                }
+                for (Trades line : this.trades) {
+                    writer.write(line.toString() + System.lineSeparator());
+                }
+            }
+        } catch (IOException err) {
+            throw new IOException("Error occurred when writing data to file for " + this.ticker);
+        }
     
     }
 
@@ -472,7 +474,7 @@ public class HistoricalDataDownloader implements EWrapper {
         @Override   //show datetime, open, high, low, close, volume
         public String toString() { 
             String[] data = {this.datetime, String.valueOf(this.open), String.valueOf(this.high), String.valueOf(this.low), String.valueOf(this.close), String.valueOf(this.volume)};
-            return (Stream.of(data).collect(Collectors.joining(", ")) + lineDelimiter); //csv format
+            return (Stream.of(data).collect(Collectors.joining(", "))); //csv format
         }
 
         @Override   //obj A is considered larger than B if its datetime is after that of B (ie recent data is larger)
@@ -523,7 +525,7 @@ public class HistoricalDataDownloader implements EWrapper {
         @Override   //show datetime, bid, ask, open, high, low, close, volume
         public String toString() { 
             String[] data = {this.bid.datetime, String.valueOf(this.bid.bid), String.valueOf(this.ask.ask), String.valueOf(this.trades.open), String.valueOf(this.trades.high), String.valueOf(this.trades.low), String.valueOf(this.trades.close), String.valueOf(this.trades.volume)};
-            return (Stream.of(data).collect(Collectors.joining(", ")) + lineDelimiter); //csv format
+            return (Stream.of(data).collect(Collectors.joining(", "))); //csv format
         }
 
     }
