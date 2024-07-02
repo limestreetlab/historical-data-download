@@ -6,7 +6,10 @@ import java.util.regex.*;
 import java.time.*;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.Temporal;
-import java.io.IOException;
+import java.io.*;
+import java.nio.*;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.*;
 
 
 public class HistoricalDataDownloader implements EWrapper {
@@ -37,29 +40,50 @@ public class HistoricalDataDownloader implements EWrapper {
     private boolean isBidRequestDone = false; //flag to mark end of bid request
     private boolean isAskRequestDone = false; //flag to mark end of ask request
     private boolean isTradesRequestDone = false; //flag to mark end of trades request
-    private Queue<Bid> bids = new LinkedList<>(); //container to accumulate Bid objs
-    private Queue<Ask> asks = new LinkedList<>(); //container to accumulate Ask objs
-    private Queue<Trades> trades = new LinkedList<>(); //container to accumulate Trades objs
-    private Queue<BidAskTrades> bidsAsksTrades = new LinkedList<>(); //container to join bids,asks,trades for intraday
+    private LinkedList<Bid> bids = new LinkedList<>(); //container to accumulate Bid objs
+    private LinkedList<Ask> asks = new LinkedList<>(); //container to accumulate Ask objs
+    private LinkedList<Trades> trades = new LinkedList<>(); //container to accumulate Trades objs
+    private LinkedList<BidAskTrades> bidsAsksTrades = new LinkedList<>(); //container to join bids,asks,trades for intraday
+    private Path dirPath; //path to the directory to save this data file
 
     /*
     Constructor, setting instance variables to the request parameters
     */
-    private HistoricalDataDownloader(String ticker, String reqEndDateTime, String reqPeriod, String reqBarSize) {
+    private HistoricalDataDownloader(String ticker, String reqEndDateTime, String reqPeriod, String reqBarSize, String dirPath) throws IllegalArgumentException {
         this.ticker = ticker;
         this.reqEndDateTime = reqEndDateTime;
         this.reqPeriod = reqPeriod;
         this.reqBarSize = reqBarSize;
         this.isIntraday = Arrays.stream(new String[]{"sec", "min", "hour"}).anyMatch(reqBarSize::contains) ? true : false; //flag raised for intraday request
+        this.dirPath = Paths.get(dirPath);
+        if (!Files.exists(this.dirPath)) {
+            throw new IllegalArgumentException("Input path does not exist.");
+        }
+        if (!Files.isDirectory(this.dirPath)) {
+            throw new IllegalArgumentException("Input path is not a directory.");
+        }
+        if (!Files.isWritable(this.dirPath)) {
+            throw new IllegalArgumentException("Input path is not writable.");
+        }
     }
 
     /*
     Constructor accessor, global instantiation point for this class instance
+    @param String ticker
+    @param String endDateTime year
+    @param String endDateTime month
+    @param String endDateTime day
+    @param String period: "<digit> DurationString" where DurationString is S = seconds, D = day, W = week, M = month, Y = year
+    @param String dataSize: "<digit> SizeString", valid strings are <1/5/10/15/30> secs, <1/2/3/5/10/15/20/30> mins, <1/2/3/4/8> hours, <1> day/week/month; note 1 min and 1 hour (no s)
+    @param String path: path to the directory where file will be saved
     */
-    public static HistoricalDataDownloader getDownloader(String ticker, String reqEndDateTime, String reqPeriod, String reqBarSize) {
+    public static HistoricalDataDownloader getDownloader(String ticker, int endYear, int endMonth, int endDay, String reqPeriod, String reqBarSize, String dirPath) throws IllegalArgumentException {
+        String reqEndDateTime = makeDateTime(endYear, endMonth, endDay); //in valid datetime format
+       
         if (downloader == null) {
-            downloader = new HistoricalDataDownloader(ticker, reqEndDateTime, reqPeriod, reqBarSize);
+            downloader = new HistoricalDataDownloader(ticker, reqEndDateTime, reqPeriod, reqBarSize, dirPath);
         }
+        
         return downloader;
     }
     
@@ -69,21 +93,29 @@ public class HistoricalDataDownloader implements EWrapper {
         String dateTime = null;
         String period = null;
         String barSize = null;
+        String dirPath = null;
+        String year = null;
+        String month = null;
+        String day = null;
 
         try { //get contract parameters from cmd, then assign
             Map<String, String> parameters = readCmdInputs(); 
             ticker = parameters.get("ticker");
-            dateTime = parameters.get("dateTime");
+            year = parameters.get("endYear");
+            month = parameters.get("endMonth");
+            day = parameters.get("endDay");
             period =  parameters.get("period");
             barSize = parameters.get("barSize");
+            dirPath = parameters.get("path");
 
         } catch (IllegalArgumentException err) {
             System.out.println(err.getMessage());
             System.exit(0);
         }
 
-        downloader = getDownloader(ticker, dateTime, period, barSize); //construct download instance 
+        downloader = getDownloader(ticker, Integer.parseInt(year), Integer.parseInt(month), Integer.parseInt(day), period, barSize, dirPath); //construct download instance 
         downloader.start();
+        System.out.println("Data request for " + ticker + " completed.");
         
     }
 
@@ -105,9 +137,9 @@ public class HistoricalDataDownloader implements EWrapper {
             this.isAskRequestDone = true; //no bid and ask requests
         }
 
-        while ( !downloader.isBidRequestDone || !downloader.isAskRequestDone || !downloader.isTradesRequestDone  ) { //loop until request(s) completed
+        while ( !this.isBidRequestDone || !this.isAskRequestDone || !this.isTradesRequestDone  ) { //loop until request(s) completed
 
-            downloader.readerSignal.waitForSignal();
+            this.readerSignal.waitForSignal();
             try {
                 this.reader.processMsgs(); //trigger callback
             } catch (IOException err) {
@@ -116,15 +148,49 @@ public class HistoricalDataDownloader implements EWrapper {
 
         } //all request messages received and processed
 
-        if (this.isIntraday) {
-            this.joinBidAskTrades();
-            this.bidsAsksTrades.stream().forEach( x -> System.out.print(x));
-        } else {
-            this.trades.stream().forEach( x -> System.out.print(x));
-        }
-
+        this.saveData();
         this.closeConnection();
 
+    }
+
+    private void saveData() throws IOException, UncheckedIOException {
+        
+        String filename;
+        Path filePath; 
+        BufferedWriter writer;
+        String firstDate = this.trades.peek().datetime.substring(0, 8); 
+        String lastDate = this.trades.peekLast().datetime.substring(0, 8); 
+
+        filename = this.ticker + " " + this.reqBarSize.replaceAll("\\s", "") + " " + firstDate + "-" + lastDate + ".csv";
+        filePath = this.dirPath.resolve(filename);
+        writer = Files.newBufferedWriter(filePath); 
+        
+        if (this.isIntraday) {
+            this.joinBidAskTrades();
+            writer.write("datetime, bid, ask, open, high, low, close, volume"); //csv header
+            writer.newLine();
+            this.bidsAsksTrades.stream().forEach( line -> {
+                                                            try {
+                                                                writer.write(line.toString());
+                                                            } catch (IOException err) {
+                                                                throw new UncheckedIOException(err); //must cast IOException (checked) to an unchecked one as checked exceptions cannot occur in forEach
+                                                            }
+                                                        });  
+            } 
+        else {
+            writer.write("datetime, open, high, low, close, volume"); //csv header
+            writer.newLine();
+            this.trades.stream().forEach( line -> {
+                                                    try {
+                                                        writer.write(line.toString());
+                                                    } catch (IOException err) {
+                                                        throw new UncheckedIOException(err); //must cast IOException (checked) to an unchecked one as checked exceptions cannot occur in forEach
+                                                    }
+                                                });
+        }
+
+        writer.close();
+    
     }
 
     /*
@@ -148,7 +214,8 @@ public class HistoricalDataDownloader implements EWrapper {
         String intervalUnit; //ex-digit part
         String intervalString; //converted to API string
         String barSize; //re-concatenated
-        final Set<String> validSecMinIntervalDigit = Set.of("1", "5", "10", "15", "30"); 
+        String path; //directory path to save data
+        Set<String> validSecMinIntervalDigit = Set.of("1", "5", "10", "15", "30"); 
         final Pattern inputPattern = Pattern.compile("(\\d+)(\\D+)"); //regex to split request into digit and character groups, like 100 day -> (100)( day)
         Matcher regexMatcher;
 
@@ -168,16 +235,11 @@ public class HistoricalDataDownloader implements EWrapper {
             month = Integer.valueOf( scanner.nextLine().trim() );
             System.out.println("Enter request end day: ");
             day = Integer.valueOf( scanner.nextLine().trim() );
-            if ( day < 1 || day > 31 || month < 1 || month > 12 || year > Year.now().getValue() || year < Year.now().getValue()-2 ) {
+            if ( day < 1 || day > 31 || month < 1 || month > 12 || year > Year.now().getValue() || year < Year.now().getValue()-5 ) {
                 throw new IllegalArgumentException("Invalid input date.");
             }
         } catch (NumberFormatException err) {
             throw new NumberFormatException("Invalid input date."); //cannot parse to int
-        }
-        try {
-            dateTime = makeDateTime(year, month, day);
-        } catch (IllegalArgumentException err) {
-            throw new IllegalArgumentException(err);
         }
         //period read
         System.out.println("Enter data request period (such as 5 days, 1 week): ");
@@ -225,24 +287,27 @@ public class HistoricalDataDownloader implements EWrapper {
         else {
             throw new IllegalArgumentException("Could not identify bar interval requested.");
         }
-        if ( (intervalString.equals("secs") || intervalString.equals("mins")) && !validSecMinIntervalDigit.stream().anyMatch(intervalDigit::equals) ) { //sec or min interval with digit outside of valid values
+        if ( (intervalString.equals("secs") || intervalString.equals("mins")) && !(validSecMinIntervalDigit.stream().anyMatch(intervalDigit::equals)) ) { //sec or min interval with digit outside of valid values
             throw new IllegalArgumentException("Only 1/5/10/15/30 allowed for seconds and minutes.");
-        } else if ( !intervalDigit.equals("1") ) { //hour, day, week, year interval, with digit not 1
+        } else if ( (intervalString.equals("hours") || intervalString.equals("day") || intervalString.equals("week") || intervalString.equals("year")) && !intervalDigit.equals("1") ) { //hour, day, week, year interval, with digit not 1
             throw new IllegalArgumentException("Only 1 hour/day/week/year accepted.");
         }
         if ( intervalDigit.equals("1") && intervalString.charAt(intervalString.length()-1) == "s".charAt(0) ) { //when digit is 1 and last string char is 's'
             intervalString = intervalString.substring(0, intervalString.length()-1); //remove the 's'
         }
         barSize = intervalDigit + " " + intervalString;
+        //read directory path
+        System.out.println("Enter path to directory to save file in: ");
+        path = scanner.nextLine().trim();
 
-        return Stream.of(new String[][] { {"ticker", ticker}, {"dateTime", dateTime}, {"period", period}, {"barSize", barSize}} ).collect(Collectors.toMap(el -> el[0], el -> el[1]));
+        return Stream.of(new String[][] { {"ticker", ticker}, {"endYear", String.valueOf(year)}, {"endMonth", String.valueOf(month)}, {"endDay", String.valueOf(day)}, {"period", period}, {"barSize", barSize}, {"path", path} } ).collect(Collectors.toMap(el -> el[0], el -> el[1]));
 
     }
 
     /*
     @return string in IBAPI dateTime format with timezone specified
     */
-    static private String makeDateTime(int year, int month, int day) throws IllegalArgumentException {
+    static public String makeDateTime(int year, int month, int day) throws IllegalArgumentException {
         ZonedDateTime dateTime = null;
         try {
             dateTime = ZonedDateTime.of(year, month, day, 16, 0, 0, 0, timezone); //creating a ZonedDateTime obj
