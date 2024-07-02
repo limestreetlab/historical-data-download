@@ -302,6 +302,8 @@ public class HistoricalDataDownloader implements EWrapper {
         System.out.println("Enter path to directory to save file in: ");
         path = scanner.nextLine().trim();
 
+        scanner.close();
+
         return Stream.of(new String[][] { {"ticker", ticker}, {"endYear", String.valueOf(year)}, {"endMonth", String.valueOf(month)}, {"endDay", String.valueOf(day)}, {"period", period}, {"barSize", barSize}, {"path", path} } ).collect(Collectors.toMap(el -> el[0], el -> el[1]));
 
     }
