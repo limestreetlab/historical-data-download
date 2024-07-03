@@ -1,3 +1,5 @@
+package historicalData;
+
 import com.ib.client.*;
 import java.util.stream.*;
 import java.util.*;
@@ -121,7 +123,11 @@ public class HistoricalDataDownloader implements EWrapper {
         }
 
         downloader = getDownloader(ticker, Integer.parseInt(year), Integer.parseInt(month), Integer.parseInt(day), period, barSize, dirPath); //construct download instance 
-        downloader.start();
+        try {
+            downloader.start();
+        } catch (Exception err) {
+            System.out.println(err.getMessage());
+        } 
         System.out.println("Data request for " + ticker + " completed.");
         
     }
@@ -129,34 +135,44 @@ public class HistoricalDataDownloader implements EWrapper {
     /*
     main method encapsulating all operations from connect and request to save and disconnect
     */
-    public void start() throws IOException {
+    public void start() throws IOException, RuntimeException {
 
         this.openConnection(portNumber); //connect to TWS server
         this.setContract();
 
         //submit request(s) to server, with predetermined (arbitrarily) IDs for each type
-        if (this.isIntraday) { //intraday case
-            this.request(PriceDataType.TRADES, 1); 
-            this.request(PriceDataType.BID, 2);
-            this.request(PriceDataType.ASK, 3);
-        } else { //interday case
-            this.request(PriceDataType.TRADES, 1); 
-            this.isBidRequestDone = true; //no bid and ask requests
-            this.isAskRequestDone = true; //no bid and ask requests
-        }
+        try {
 
-        while ( !this.isBidRequestDone || !this.isAskRequestDone || !this.isTradesRequestDone  ) { //loop until request(s) completed
-
-            this.readerSignal.waitForSignal();
-            try {
-                this.reader.processMsgs(); //trigger callback
-            } catch (IOException err) {
-                throw new IOException(err);
+            if (this.isIntraday) { //intraday case
+                this.request(PriceDataType.TRADES, 1); 
+                this.request(PriceDataType.BID, 2);
+                this.request(PriceDataType.ASK, 3);
+            } else { //interday case
+                this.request(PriceDataType.TRADES, 1); 
+                this.isBidRequestDone = true; //no bid and ask requests
+                this.isAskRequestDone = true; //no bid and ask requests
             }
 
-        } //all request messages received and processed
+            while ( !this.isBidRequestDone || !this.isAskRequestDone || !this.isTradesRequestDone  ) { //loop until request(s) completed
 
-        this.saveData(); //save accumulated data to file
+                this.readerSignal.waitForSignal();
+                try {
+                    this.reader.processMsgs(); //trigger callback
+                } catch (IOException err) {
+                    throw new IOException(err);
+                }
+
+            } //all request messages received and processed
+
+        } catch (RuntimeException err) {
+            throw new RuntimeException(err.getMessage());
+        }
+
+        try {
+            this.saveData(); //save accumulated data to file
+        } catch (IOException err) {
+            throw new IOException(err);
+        }
         this.closeConnection(); 
 
     }
@@ -358,7 +374,7 @@ public class HistoricalDataDownloader implements EWrapper {
     @param List options: null
     @see: https://ibkrcampus.com/ibkr-api-page/twsapi-doc/#requesting-historical-bars
     */
-    private void request(PriceDataType reqDataType, int reqId) {
+    private void request(PriceDataType reqDataType, int reqId) throws UncheckedIOException {
         this.client.reqHistoricalData(reqId, this.contract, this.reqEndDateTime, this.reqPeriod, this.reqBarSize, reqDataType.name(), 1, 1, false, null);
     }
 
@@ -438,11 +454,19 @@ public class HistoricalDataDownloader implements EWrapper {
     @Override
     public void error(Exception e) {
         System.out.println("Error occurred: " + e.getMessage());
+        if (this.client.isConnected()) {
+            this.closeConnection();
+        }
+        throw new RuntimeException(e.getMessage());
     }
 
     @Override
     public void error(String str) {
         System.out.println(str);
+        if (this.client.isConnected()) {
+            this.closeConnection();
+        }
+        throw new RuntimeException(str);
     }
 
     @Override
@@ -451,6 +475,10 @@ public class HistoricalDataDownloader implements EWrapper {
             ; //do nothing
         } else {
             System.out.println("Error occurred: code " + errorCode + ", " + errorMsg);
+            if (this.client.isConnected()) {
+                this.closeConnection();
+            }
+            throw new RuntimeException(errorCode + " " + errorMsg);
         }
     }
 

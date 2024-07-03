@@ -2,8 +2,9 @@
 *.class 
 *.log 
 
-#IBAPI source
-com/
+#test folders
+/temp
+/test
 
 #macOS specific
 .DS_Store 
