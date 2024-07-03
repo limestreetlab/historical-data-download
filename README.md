@@ -33,8 +33,8 @@ Codes to download **US single stock** historical data using IB TWS API.
 - When a non-trading date entered, the last trading day will be used
 
 #### API Limitations and Workarounds
-- Because request data types are seperated into bid, ask, and traded prices and only one can be sent per request, requests have to be repeatedly sent. The seperate data are joined after checking for timestamps.
-- IB emphasizes it is not a data provider and limits return data points to a few hundreds per request (soft limit), so data windows are directly tied to granularity/interval requested; for 1-min data, 390 (6.5hrs x 60mins) points per day, so 2 days window (780points) per request appropriate. Codes have to slice the requested window, send separate requests, and combine the output. 
+- Because request data types are seperated into bid, ask, and traded prices and only one can be sent per request, requests have to be repeatedly sent
+- IB emphasizes it is not a data provider and limits return data points to a few hundreds per request (soft limit), so data windows are directly tied to granularity/interval requested; for 1-min data, 390 (6.5hrs x 60mins) points per day, so 2 days window (780points) per request appropriate
 - Maximum 10 simultaneous requests.
 
 #### Logic Overview

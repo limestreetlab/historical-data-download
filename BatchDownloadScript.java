@@ -72,7 +72,6 @@ public class BatchDownloadScript {
             try {
                 downloader.start();
                 System.out.println(ticker + " request finished.");
-                Thread.sleep(10000);
             } catch (Exception err) {
                 System.out.println(err.getMessage());
             }
