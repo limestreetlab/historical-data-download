@@ -6,8 +6,8 @@ import java.util.*;
 import java.io.*;
 
 /*
-script to send download requests for multiple tickers, read from a file
-tickers in the file should be one ticker per line
+script to send download requests for multiple tickers read from a tickerlist file
+the file should be one ticker per line
 */
 public class BatchDownloadScript {
 
@@ -63,7 +63,7 @@ public class BatchDownloadScript {
 
         tickers = Files.readAllLines(tickersPath);  //open tickers file, read all lines at once and populate into List
 
-        downloader = HistoricalDataDownloader.getDownloader(tickers, year, month, day, period, dataSize, dir);
+        downloader = HistoricalDataDownloader.getDownloader(tickers, year, month, day, period, dataSize, dir, false);
             
         try {
             downloader.start();

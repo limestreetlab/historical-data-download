@@ -5,7 +5,7 @@
 #non-code folders
 /temp
 /test
-/data
+/data*
 
 #macOS specific
 .DS_Store 

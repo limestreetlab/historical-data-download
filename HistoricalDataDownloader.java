@@ -422,7 +422,7 @@ public class HistoricalDataDownloader implements EWrapper {
     @Override
     public void historicalData(int reqId, Bar candlestick) throws IllegalArgumentException {
 
-        String datetimestamp = this.isIntraday ? removeTimezone(candlestick.time().trim()) : candlestick.time().trim(); //remove timezone only if requested barsize is of intraday timescale
+        String datetimestamp = this.isIntraday ? removeTimezone(candlestick.time().trim()) : candlestick.time().trim(); //remove timezone only if requested barsize is of intraday timescale, interday data have no tz
         double open = 0;
         double high = 0;
         double low = 0;
@@ -517,13 +517,13 @@ public class HistoricalDataDownloader implements EWrapper {
         BID_ASK
     }
 
-    private record Bid(String datetime, double bid) {
+    private record Bid(String datetime, Double bid) {
     }
 
-    private record Ask(String datetime, double ask) {
+    private record Ask(String datetime, Double ask) {
     }
 
-    private record Trades(String datetime, double open, double high, double low, double close, long volume) implements Comparable<Trades> {
+    private record Trades(String datetime, Double open, Double high, Double low, Double close, Long volume) implements Comparable<Trades> {
 
         @Override   //show datetime, open, high, low, close, volume
         public String toString() { 
@@ -586,8 +586,22 @@ public class HistoricalDataDownloader implements EWrapper {
 
     //combine the bids, asks, and trades data queues
     private void joinBidAskTrades() throws ArrayIndexOutOfBoundsException {
-        if ( !(this.bids.size() == this.asks.size() && this.asks.size() == this.trades.size()) ) {
-            throw new ArrayIndexOutOfBoundsException("Retrieved bids, asks, and trades data are of unequal lengths/sizes.");
+
+        //the bids, askas, and trades collections should have identical sizes and supermajority of times are, but for less-liquid stocks trades data can be missing at a timestamp
+        if ( !(this.bids.size() == this.asks.size() && this.asks.size() == this.trades.size()) ) {//in case of unequal sizes
+            
+            if ( (this.bids.size() == this.asks.size()) && (this.trades.size() < this.bids.size()) ) { //commonly trades missing but bids and asks exist, fill null values in trades
+
+                for (int i = 0; i < this.bids.size(); i++) {  //loop through bids
+                    if (!(this.bids.get(i).datetime().equals(this.trades.get(i).datetime()))) {  //when a timestamp mismatched
+                        this.trades.add(i, new Trades(this.bids.get(i).datetime(), null, null, null, null, null)); //insert into trades collection with null data
+                    }
+                }
+
+            } else { //very rarely should bids and asks be missing, cannot handle
+                throw new ArrayIndexOutOfBoundsException("The bids and asks data are less than trades data for " + this.contract.symbol());
+            }
+
         }
 
         for (Bid bid: this.bids) {
