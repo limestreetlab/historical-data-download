@@ -31,9 +31,9 @@ public class HistoricalDataDownloader implements EWrapper {
     private EReaderSignal readerSignal; //sends signals to reader on message queue status
     private EReader reader; //reader obj to handle message queue, EReader extends Thread and has run()
     //request parameters
-    private Contract contract = new Contract(); //IBKR Contract obj
-    private String ticker; 
-    private String reqEndDateTime; 
+    private Contract contract = new Contract(); //IBKR Contract obj used when sending requests
+    private List<String> tickers; //container to hold request tickers
+    private String reqEndDateTime; //date from which request is backdated
     private String reqPeriod; //from end datetime, how long to retrieve
     private String reqBarSize; //data granularity
     //processing, result, other variables
@@ -51,27 +51,18 @@ public class HistoricalDataDownloader implements EWrapper {
     /*
     Constructor, setting instance variables to the request parameters
     */
-    private HistoricalDataDownloader(String ticker, String reqEndDateTime, String reqPeriod, String reqBarSize, String dirPath) throws IllegalArgumentException {
-        this.ticker = ticker;
+    private HistoricalDataDownloader(List<String> tickers, String reqEndDateTime, String reqPeriod, String reqBarSize, String dirPath) throws IllegalArgumentException {
+        this.tickers = tickers;
         this.reqEndDateTime = reqEndDateTime;
         this.reqPeriod = reqPeriod;
         this.reqBarSize = reqBarSize;
-        this.isIntraday = Arrays.stream(new String[]{"sec", "min", "hour"}).anyMatch(reqBarSize::contains) ? true : false; //flag raised for intraday request
         this.dirPath = Paths.get(dirPath);
-        if (!Files.exists(this.dirPath)) {
-            throw new IllegalArgumentException("Input path does not exist.");
-        }
-        if (!Files.isDirectory(this.dirPath)) {
-            throw new IllegalArgumentException("Input path is not a directory.");
-        }
-        if (!Files.isWritable(this.dirPath)) {
-            throw new IllegalArgumentException("Input path is not writable.");
-        }
+        this.isIntraday = Arrays.stream(new String[]{"sec", "min", "hour"}).anyMatch(reqBarSize::contains) ? true : false; //flag raised for intraday request
     }
 
     /*
     Constructor accessor, global instantiation point for this class instance
-    @param String ticker
+    @param List<String> tickers
     @param String endDateTime year
     @param String endDateTime month
     @param String endDateTime day
@@ -80,21 +71,37 @@ public class HistoricalDataDownloader implements EWrapper {
     @param String path: path to the directory where file will be saved
     @param bool withHeader: true to write headers to csv data, false without
     */
-    public static HistoricalDataDownloader getDownloader(String ticker, int endYear, int endMonth, int endDay, String reqPeriod, String reqBarSize, String dirPath, boolean withHeader) throws IllegalArgumentException {
+    public static HistoricalDataDownloader getDownloader(List<String> tickers, int endYear, int endMonth, int endDay, String reqPeriod, String reqBarSize, String dirPath, boolean withHeader) throws IllegalArgumentException {
         String reqEndDateTime = makeDateTime(endYear, endMonth, endDay); //convert to valid datetime format defined
        
-        if (downloader == null) {
-            downloader = new HistoricalDataDownloader(ticker, reqEndDateTime, reqPeriod, reqBarSize, dirPath);
-        }
-
+        downloader = new HistoricalDataDownloader(tickers, reqEndDateTime, reqPeriod, reqBarSize, dirPath);
+    
         downloader.withHeader = withHeader ? true : false;
+
+        if (!Files.exists(Paths.get(dirPath))) {
+            throw new IllegalArgumentException("Input path does not exist.");
+        }
+        if (!Files.isDirectory(Paths.get(dirPath))) {
+            throw new IllegalArgumentException("Input path is not a directory.");
+        }
+        if (!Files.isWritable(Paths.get(dirPath))) {
+            throw new IllegalArgumentException("Input path is not writable.");
+        }
         
         return downloader;
     }
-    public static HistoricalDataDownloader getDownloader(String ticker, int endYear, int endMonth, int endDay, String reqPeriod, String reqBarSize, String dirPath) throws IllegalArgumentException {
-        return getDownloader(ticker, endYear, endMonth, endDay, reqPeriod, reqBarSize, dirPath, true);
+    //overloaded version with optional withHeader=true
+    public static HistoricalDataDownloader getDownloader(List<String> tickers, int endYear, int endMonth, int endDay, String reqPeriod, String reqBarSize, String dirPath) throws IllegalArgumentException {
+        return getDownloader(tickers, endYear, endMonth, endDay, reqPeriod, reqBarSize, dirPath, true);
     }
-    
+    //overloaded version with a single ticker as string
+    public static HistoricalDataDownloader getDownloader(String ticker, int endYear, int endMonth, int endDay, String reqPeriod, String reqBarSize, String dirPath, boolean withHeader) throws IllegalArgumentException {
+        return getDownloader(List.of(ticker), endYear, endMonth, endDay, reqPeriod, reqBarSize, dirPath, withHeader);
+    }
+    //overloaded version with single ticker as string and optional withHeader=true
+    public static HistoricalDataDownloader getDownloader(String ticker, int endYear, int endMonth, int endDay, String reqPeriod, String reqBarSize, String dirPath) throws IllegalArgumentException {
+        return getDownloader(List.of(ticker), endYear, endMonth, endDay, reqPeriod, reqBarSize, dirPath, true);
+    }
     
     public static void main (String[] args) throws IllegalArgumentException, NumberFormatException, IOException {
 
@@ -127,8 +134,9 @@ public class HistoricalDataDownloader implements EWrapper {
             downloader.start();
         } catch (Exception err) {
             System.out.println(err.getMessage());
+            System.exit(0);
         } 
-        System.out.println("Data request for " + ticker + " completed.");
+        System.out.println("Data request for " + ticker + " done.");
         
     }
 
@@ -138,41 +146,61 @@ public class HistoricalDataDownloader implements EWrapper {
     public void start() throws IOException, RuntimeException {
 
         this.openConnection(portNumber); //connect to TWS server
-        this.setContract();
+        System.out.println("Connection to TWS established.");
 
-        //submit request(s) to server, with predetermined (arbitrarily) IDs for each type
-        try {
+        for (String ticker : this.tickers) { //loop through each ticker in tickers list
 
-            if (this.isIntraday) { //intraday case
-                this.request(PriceDataType.TRADES, 1); 
-                this.request(PriceDataType.BID, 2);
-                this.request(PriceDataType.ASK, 3);
-            } else { //interday case
-                this.request(PriceDataType.TRADES, 1); 
-                this.isBidRequestDone = true; //no bid and ask requests
-                this.isAskRequestDone = true; //no bid and ask requests
-            }
+            this.setContract(ticker); //set contract to ticker in current loop
+            System.out.println("Requesting data for " + ticker + "......");
+            
+            try { //submit request(s) to server, with predetermined (arbitrarily) IDs for each type
 
-            while ( !this.isBidRequestDone || !this.isAskRequestDone || !this.isTradesRequestDone  ) { //loop until request(s) completed
+                this.bids.clear(); //reset
+                this.asks.clear();
+                this.trades.clear();
+                this.bidsAsksTrades.clear();
 
-                this.readerSignal.waitForSignal();
-                try {
-                    this.reader.processMsgs(); //trigger callback
-                } catch (IOException err) {
-                    throw new IOException(err);
+                if (this.isIntraday) { //intraday case, request bid/ask/trades
+                    this.request(PriceDataType.TRADES, 1); 
+                    this.request(PriceDataType.BID, 2);
+                    this.request(PriceDataType.ASK, 3);
+                } else { //interday case, request trades only
+                    this.request(PriceDataType.TRADES, 1); 
+                    this.isBidRequestDone = true; //no bid and ask requests
+                    this.isAskRequestDone = true; //no bid and ask requests
                 }
 
-            } //all request messages received and processed
+                while ( !this.isBidRequestDone || !this.isAskRequestDone || !this.isTradesRequestDone  ) { //loop until request(s) completed
 
-        } catch (RuntimeException err) {
-            throw new RuntimeException(err.getMessage());
+                    this.readerSignal.waitForSignal();
+                    
+                    try {
+                        this.reader.processMsgs(); //trigger callback
+                    } catch (IOException err) {
+                        throw new IOException(err);
+                    }
+
+                } //all request messages received and processed
+                this.isBidRequestDone = false; //reset
+                this.isAskRequestDone = false;
+                this.isTradesRequestDone = false;
+                
+
+            } catch (RuntimeException err) {
+                throw new RuntimeException(err.getMessage());
+            }
+           
+            System.out.println(ticker + " data received, proceeding to save...");
+
+            try {
+                this.saveData(); //save accumulated data to file
+                System.out.println("...now saved.");
+            } catch (IOException err) {
+                throw new IOException(err);
+            }
+
         }
 
-        try {
-            this.saveData(); //save accumulated data to file
-        } catch (IOException err) {
-            throw new IOException(err);
-        }
         this.closeConnection(); 
 
     }
@@ -181,10 +209,10 @@ public class HistoricalDataDownloader implements EWrapper {
         
         String filename;
         Path filePath; 
-        String firstDate = this.trades.peek().datetime.substring(0, 8); 
-        String lastDate = this.trades.peekLast().datetime.substring(0, 8); 
+        String firstDate = this.trades.peek().datetime.substring(0, 8); //oldest datetime in req
+        String lastDate = this.trades.peekLast().datetime.substring(0, 8); //newest datetime in req
 
-        filename = this.ticker + " " + this.reqBarSize.replaceAll("\\s", "") + " " + firstDate + "-" + lastDate + ".csv";
+        filename = this.contract.symbol() + " " + this.reqBarSize.replaceAll("\\s", "") + " " + firstDate + "-" + lastDate + ".csv"; //filename format "AAPL 1min yyyymmdd-yyyymmdd.csv"
         filePath = this.dirPath.resolve(filename);
 
         try (BufferedWriter writer = Files.newBufferedWriter(filePath)) {
@@ -208,7 +236,7 @@ public class HistoricalDataDownloader implements EWrapper {
                 }
             }
         } catch (IOException err) {
-            throw new IOException("Error occurred when writing data to file for " + this.ticker);
+            throw new IOException("Error occurred when writing data to file for " + this.contract.symbol());
         }
     
     }
@@ -353,8 +381,8 @@ public class HistoricalDataDownloader implements EWrapper {
     setting variables for the Contract object
     @see https://interactivebrokers.github.io/tws-api/classIBApi_1_1Contract.html
     */
-    private void setContract() {
-        this.contract.symbol(this.ticker);
+    private void setContract(String ticker) {
+        this.contract.symbol(ticker.trim().toUpperCase());
         this.contract.secType("STK");
         this.contract.currency("USD");
         this.contract.exchange("SMART"); 
@@ -377,11 +405,9 @@ public class HistoricalDataDownloader implements EWrapper {
     private void request(PriceDataType reqDataType, int reqId) throws UncheckedIOException {
         this.client.reqHistoricalData(reqId, this.contract, this.reqEndDateTime, this.reqPeriod, this.reqBarSize, reqDataType.name(), 1, 1, false, null);
     }
-
     private void request() { //overloaded no arg-request
         this.request(PriceDataType.TRADES, 1);
     }
-
     private void request(PriceDataType reqDataType) { //overloaded type-only request
         this.request(reqDataType, 1);
     }

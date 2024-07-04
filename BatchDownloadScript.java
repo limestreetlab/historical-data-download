@@ -63,19 +63,13 @@ public class BatchDownloadScript {
 
         tickers = Files.readAllLines(tickersPath);  //open tickers file, read all lines at once and populate into List
 
-        //loop through the queue, send data requests 1-by-1
-        for (String ticker : tickers) { 
-
-            ticker = ticker.trim().toUpperCase();
-            System.out.println("Requesting data for " + ticker + "...");
-            downloader = HistoricalDataDownloader.getDownloader(ticker, year, month, day, period, dataSize, dir);
-            try {
-                downloader.start();
-                System.out.println(ticker + " request finished.");
-            } catch (Exception err) {
-                System.out.println(err.getMessage());
-            }
-
+        downloader = HistoricalDataDownloader.getDownloader(tickers, year, month, day, period, dataSize, dir);
+            
+        try {
+            downloader.start();
+        } catch (Exception err) {
+            System.out.println(err.getMessage());
+            System.exit(0);
         }
 
         System.out.println("All requests finished. Goodbye.");

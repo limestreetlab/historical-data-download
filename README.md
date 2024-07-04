@@ -4,7 +4,7 @@ Codes to download **US single stock** historical data using IB TWS API.
 
 #### Needs
 - [Interactive Brokers TWS API](https://ibkrcampus.com/ibkr-api-page/twsapi-doc/#find-the-api), (source/JavaClient/com)
-- Java8+
+- Java 15+
 
 #### How to Use
 - Run it in command line `java HistoricalDataDownloader` and provide inputs
@@ -13,9 +13,9 @@ Codes to download **US single stock** historical data using IB TWS API.
 
 #### Input parameters
 - Stock ticker
-- Data interval/granularity (from 1 second to 1 week)
 - End date of data window (year, month, day)
 - Data period (how long to retrieve)
+- Data interval/granularity (from 1 second to 1 week)
 - Path to file output directory
 
 #### Outputs
@@ -27,10 +27,9 @@ Codes to download **US single stock** historical data using IB TWS API.
 #### Comments
 - All times are defaulted to EST America/New York, 9:30 to 15:59, regular trading hours
 - Bid and ask prices are open prices at timestamps
-- For intraday data, the close of the last data point (ex 15:59:00 for 1-min) is different from the daily close which results from closing auction
-- Traded prices represent first traded prices in the period; for example, in case of 1-min data, the traded at 14:50:00 is the first price traded at between 14:50:00 and 14:51:00 and volume is for that minute
+- For intraday data, the close of the last data point (like 15:59:00 for 1-min) is different from the daily close which results from closing auction
 - Trading volumes provided by IBKR are lower than other sources (Yahoo Finance etc), often by a substantial margin. Only RTH data are used here. [IBKR data feed filters trades](https://ibkrcampus.com/ibkr-api-page/twsapi-doc/#filtered-hist-data) that tend to occur away from NBBO such as block trades and excludes odd lot trades
-- When a non-trading date entered, the last trading day will be used
+- When a non-trading date entered, it will be shifted to the last trading day and request period remains unchanged
 
 #### API Limitations and Workarounds
 - Because request data types are seperated into bid, ask, and traded prices and only one can be sent per request, requests have to be repeatedly sent

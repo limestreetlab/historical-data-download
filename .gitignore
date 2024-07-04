@@ -2,9 +2,10 @@
 *.class 
 *.log 
 
-#test folders
+#non-code folders
 /temp
 /test
+/data
 
 #macOS specific
 .DS_Store 
