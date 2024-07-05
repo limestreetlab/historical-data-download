@@ -4,6 +4,8 @@ import java.nio.file.*;
 import java.nio.*;
 import java.util.*;
 import java.io.*;
+import java.time.Instant;
+import java.time.Duration;
 
 /*
 script to send download requests for multiple tickers read from a tickerlist file
@@ -64,15 +66,16 @@ public class BatchDownloadScript {
         tickers = Files.readAllLines(tickersPath);  //open tickers file, read all lines at once and populate into List
 
         downloader = HistoricalDataDownloader.getDownloader(tickers, year, month, day, period, dataSize, dir, false);
-            
+        
+        Instant startTime = Instant.now(); //req start time clock
         try {
             downloader.start();
         } catch (Exception err) {
             System.out.println(err.getMessage());
             System.exit(0);
         }
-
-        System.out.println("All requests finished. Goodbye.");
+        Instant endTime = Instant.now(); //req end time clock
+        System.out.println("All requests finished. " + Duration.between(startTime, endTime).toMinutes() + " minutes taken" );
 
     }
 
