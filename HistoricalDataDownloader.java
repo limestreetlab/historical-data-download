@@ -151,7 +151,7 @@ public class HistoricalDataDownloader implements EWrapper {
         for (String ticker : this.tickers) { //loop through each ticker in tickers list
 
             this.setContract(ticker); //set contract to ticker in current loop
-            System.out.println("Requesting data for " + ticker + "......");
+            System.out.print("Requesting data for " + ticker + "...");
             
             try { //submit request(s) to server, with predetermined (arbitrarily) IDs for each type
 
@@ -190,11 +190,11 @@ public class HistoricalDataDownloader implements EWrapper {
                 throw new RuntimeException(err.getMessage());
             }
            
-            System.out.println(ticker + " data received, proceeding to save...");
+            System.out.print("...data received, proceeding to save...");
 
             try {
                 this.saveData(); //save accumulated data to file
-                System.out.println("...now saved.");
+                System.out.println("...saved.");
             } catch (IOException err) {
                 throw new IOException(err);
             }

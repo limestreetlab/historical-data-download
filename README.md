@@ -8,11 +8,11 @@ Codes to download **US single stock** historical data using IB TWS API.
 
 #### How to Use
 - Run it in command line `java HistoricalDataDownloader` and input request parameters
-- Data will be saved in provided directory, named <ticker> <barSize> <yyyymmdd-yyyymmdd>
+- Data will be saved in provided directory, named ticker barSize yyyymmdd-yyyymmdd
 - If used from another class, call static `HistoricalDataDownloader::getDownloader` and `HistoricalDataDownloader::start`
 
 #### Input parameters
-- Stock tickers, as String for one ticker or List<String> for multiple tickers
+- Stock tickers, as String for one ticker or List\<String\> for multiple tickers
 - End date of data window (year, month, day)
 - Data period (how long to retrieve)
 - Data interval/granularity (from 1 second to 1 week)
@@ -39,7 +39,7 @@ Codes to download **US single stock** historical data using IB TWS API.
 
 #### Logic Overview
 - One class (singleton), whose instance used to connect to TWS and perform all requests using different request identifiers (reqId)
-- Constructors overloaded to take ticker as either String or List<String>
+- Constructors overloaded to take ticker as either String or List\<String\>
 - `start()` encapsulates major operations including TWS connect, ticker looping, contract setting, request, msg reading, saving, and disconnect
 - EReader instance, tied to the socket, listens to incoming messages and pushes all messages into the queue
 - Built-in `EReader.processMsgs()` then called to pass received data and tagged reqId from the queue to relevant callback `HistoricalData()`
@@ -50,7 +50,7 @@ Codes to download **US single stock** historical data using IB TWS API.
 - Because IBKR bid, ask, and trades data require one request each, intraday data need to send 3 separate requests, of different (arbritarily assigned) ids, and results pushed into 3 collections to be combined into one at the end
 - Interday data come only from TRADES request, so uses only one container
 - Custom data types Bid, Ask, Trades defined, with compareTo and toString overriden
-- IB data feed is chronological, so synchronous saving of custom data is in natural order already; but Comparable<Trades> makes possible to sort Trades type based on datetime
+- IB data feed is chronological, so synchronous saving of custom data is in natural order already; but Comparable\<Trades\> makes possible to sort Trades type based on datetime
 
 #### Future Works
 - Expand to non-equity contracts, especially FX and futures

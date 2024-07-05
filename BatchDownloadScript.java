@@ -6,6 +6,8 @@ import java.util.*;
 import java.io.*;
 import java.time.Instant;
 import java.time.Duration;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 
 /*
 script to send download requests for multiple tickers read from a tickerlist file
@@ -67,15 +69,18 @@ public class BatchDownloadScript {
 
         downloader = HistoricalDataDownloader.getDownloader(tickers, year, month, day, period, dataSize, dir, false);
         
-        Instant startTime = Instant.now(); //req start time clock
+        Instant startInstant = Instant.now(); //req start time clock
+        String startTime = LocalDateTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss")); 
         try {
             downloader.start();
         } catch (Exception err) {
             System.out.println(err.getMessage());
             System.exit(0);
         }
-        Instant endTime = Instant.now(); //req end time clock
-        System.out.println("All requests finished. " + Duration.between(startTime, endTime).toMinutes() + " minutes taken" );
+        Instant endInstant = Instant.now(); //req end time clock
+        System.out.println("All requests finished.");
+        System.out.println("Started at " + startTime + ", took " + Duration.between(startInstant, endInstant).toMinutes() + " minutes." );
+       
 
     }
 
