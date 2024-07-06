@@ -1,8 +1,8 @@
 import os
 import re
 
-#script to append stock data from files in one folder to those in another folder
-#number of files in both folders should match
+#script to append stock data from files in one folder to the corresponding stock data in another folder
+#number of files in both folders must match. Used to add recently downloaded data to existing data stores
 
 pattern = "(\\D{1,5})\\s(\\d{1,2}\\D+)\\s(\\d{8})-(\\d{8}).*" #1-5 character for ticker (dual class stocks can have 5), whitespace, 1-2 digit 1+character for barsize, whitespace, yyyymmdd-yyyymmdd
 fromDir = input("Enter the origin folder (contents from) path: ")
