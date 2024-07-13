@@ -69,15 +69,15 @@ public class BatchDownloadScript {
 
         downloader = HistoricalDataDownloader.getDownloader(tickers, year, month, day, period, dataSize, dir, false);
         
-        Instant startInstant = Instant.now(); //req start time clock
-        String startTime = LocalDateTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss")); 
+        Instant startInstant = Instant.now(); //request start time clock
+        String startTime = LocalDateTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss")); //record starting time
         try {
             downloader.start();
         } catch (Exception err) {
             System.out.println(err.getMessage());
             System.exit(0);
         }
-        Instant endInstant = Instant.now(); //req end time clock
+        Instant endInstant = Instant.now(); //request end time clock
         System.out.println("All requests finished.");
         System.out.println("Started at " + startTime + ", took " + Duration.between(startInstant, endInstant).toMinutes() + " minutes." );
        

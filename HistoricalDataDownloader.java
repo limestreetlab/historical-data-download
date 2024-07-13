@@ -25,7 +25,7 @@ public class HistoricalDataDownloader implements EWrapper {
     private static final DateTimeFormatter dateTimeWithoutTimezoneFormat = DateTimeFormatter.ofPattern("yyyyMMdd HH:mm:ss"); //format for intraday data without timezone, VV for timezone
     private static final DateTimeFormatter dateFormat = DateTimeFormatter.ofPattern("yyyyMMdd"); //format for non-intraday data 
     private static final ZoneId timezone = ZoneId.of("America/New_York"); //Java ZonedDateTime Class timezone obj, always use EST
-    private static final Set<Integer> okErrorCodes = Set.of(2104, 2106, 2158); //IB error codes representing data connection notifications rather than actual errors, shall be ignored
+    private static final Set<Integer> okErrorCodes = Set.of(2104, 2106, 2158, 2108, 2148); //IB error codes representing data connection notifications rather than actual errors, shall be ignored
     //API connection handles
     private EClientSocket client; //socket obj to send TWS requests
     private EReaderSignal readerSignal; //sends signals to reader on message queue status
@@ -145,13 +145,17 @@ public class HistoricalDataDownloader implements EWrapper {
     */
     public void start() throws IOException, RuntimeException {
 
+        int loopSize = this.tickers.size(); //number of times to loop
+        int currentLoopCount = 1;
+
         this.openConnection(portNumber); //connect to TWS server
         System.out.println("Connection to TWS established.");
 
         for (String ticker : this.tickers) { //loop through each ticker in tickers list
 
             this.setContract(ticker); //set contract to ticker in current loop
-            System.out.print("Requesting data for " + ticker + "...");
+            System.out.print("(" + currentLoopCount + "/" + loopSize + ") " + "Requesting data for " + ticker + "...");
+            currentLoopCount++;
             
             try { //submit request(s) to server, with predetermined (arbitrarily) IDs for each type
 
@@ -495,16 +499,33 @@ public class HistoricalDataDownloader implements EWrapper {
         throw new RuntimeException(str);
     }
 
+    /*
+    main callback server invokes to deliver error notifications 
+    @See https://interactivebrokers.github.io/tws-api/message_codes.html
+    */
     @Override
     public void error(int id, int errorCode, String errorMsg, String advancedOrderRejectJson) {
         if ( okErrorCodes.contains(errorCode) ) { //when the error code represents a notification rather than actual error
             ; //do nothing
-        } else {
-            System.out.println("Error occurred: code " + errorCode + ", " + errorMsg);
+        } else if (errorCode == 2103 || errorCode == 2105 || errorCode == 2157) { //data farm broken but will most likely restart (followed by 2104/2106/2158)
+            short sleepTime = 1; //sleeping time in minutes (whole number)
+            System.out.println( "Data farm connection error " + errorCode + " occured in " +  this.contract.symbol() + ", pausing this thread now for " + sleepTime + " minute.");
+            try {
+                Thread.sleep(sleepTime * 1000 * 60);
+            } catch (InterruptedException err) {
+                ;
+            }
+        } else if (errorCode == 162 && errorMsg.toLowerCase().contains("no data")) { //historical data error message and saying no data for requested dates for a stock (possibly new IPO etc)
             if (this.client.isConnected()) {
                 this.closeConnection();
             }
-            throw new RuntimeException(errorCode + " " + errorMsg);
+            throw new RuntimeException("No data found for the stock, possibly not traded at the time.");
+        } else {
+            System.out.println("Error occurred: error code " + errorCode + ", " + errorMsg);
+            if (this.client.isConnected()) {
+                this.closeConnection();
+            }
+            throw new RuntimeException(errorCode + ": " + errorMsg);
         }
     }
 
