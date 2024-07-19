@@ -133,8 +133,10 @@ public class HistoricalDataDownloader implements EWrapper {
         try {
             downloader.start();
         } catch (Exception err) {
+            if (downloader.client.isConnected()) {
+                downloader.closeConnection();
+            }
             System.out.println(err.getMessage());
-            System.exit(0);
         } 
         System.out.println("Data request for " + ticker + " done.");
         
@@ -143,7 +145,7 @@ public class HistoricalDataDownloader implements EWrapper {
     /*
     main method encapsulating all operations from connect and request to save and disconnect
     */
-    public void start() throws IOException, RuntimeException {
+    public void start() throws IOException, RuntimeException, IllegalArgumentException {
 
         int loopSize = this.tickers.size(); //number of times to loop
         int currentLoopCount = 1;
@@ -190,6 +192,9 @@ public class HistoricalDataDownloader implements EWrapper {
                 this.isTradesRequestDone = false;
                 
 
+            } catch (NoDataException err) {
+                System.out.println("data for " + ticker + " unavailable, skipping it.");
+                continue;
             } catch (RuntimeException err) {
                 throw new RuntimeException(err.getMessage());
             }
@@ -373,7 +378,6 @@ public class HistoricalDataDownloader implements EWrapper {
     }
 
     /*
-    @return string in IBAPI dateTime format with timezone specified
     @return string in IBAPI dateTime format without timezone 
     */
     static private String removeTimezone(String dateTimeWithTimezone) {
@@ -414,6 +418,9 @@ public class HistoricalDataDownloader implements EWrapper {
     }
     private void request(PriceDataType reqDataType) { //overloaded type-only request
         this.request(reqDataType, 1);
+    }
+    private void cancelRequest(int reqId) {
+        this.client.cancelHistoricalData(reqId);
     }
 
     /*
@@ -504,7 +511,7 @@ public class HistoricalDataDownloader implements EWrapper {
     @See https://interactivebrokers.github.io/tws-api/message_codes.html
     */
     @Override
-    public void error(int id, int errorCode, String errorMsg, String advancedOrderRejectJson) {
+    public void error(int id, int errorCode, String errorMsg, String advancedOrderRejectJson) throws RuntimeException, IllegalArgumentException {
         if ( okErrorCodes.contains(errorCode) ) { //when the error code represents a notification rather than actual error
             ; //do nothing
         } else if (errorCode == 2103 || errorCode == 2105 || errorCode == 2157) { //data farm broken but will most likely restart (followed by 2104/2106/2158)
@@ -516,16 +523,20 @@ public class HistoricalDataDownloader implements EWrapper {
                 ;
             }
         } else if (errorCode == 162 && errorMsg.toLowerCase().contains("no data")) { //historical data error message and saying no data for requested dates for a stock (possibly new IPO etc)
-            if (this.client.isConnected()) {
-                this.closeConnection();
+            if (this.isIntraday) {
+                throw new IllegalArgumentException("No data found for the stock, possibly not traded at the time.");
+            } else { //interday
+                throw new NoDataException(errorMsg); //signal to caller it is interday case for no data, ticker can be skipped (difficult to do in intraday as multiple requests BID ASK TRADES sent, id complication arises, better let it terminate)
             }
-            throw new RuntimeException("No data found for the stock, possibly not traded at the time.");
-        } else {
-            System.out.println("Error occurred: error code " + errorCode + ", " + errorMsg);
-            if (this.client.isConnected()) {
-                this.closeConnection();
-            }
+            
+        } else {            
             throw new RuntimeException(errorCode + ": " + errorMsg);
+        }
+    }
+
+    private class NoDataException extends RuntimeException {
+        private NoDataException(String msg) {
+            super(msg);
         }
     }
 
