@@ -67,7 +67,7 @@ public class BatchDownloadScript {
 
         tickers = Files.readAllLines(tickersPath);  //open tickers file, read all lines at once and populate into List
 
-        downloader = HistoricalDataDownloader.getDownloader(tickers, year, month, day, period, dataSize, dir, true);
+        downloader = HistoricalDataDownloader.getDownloader(tickers, year, month, day, period, dataSize, dir, false);
         
         Instant startInstant = Instant.now(); //request start time clock
         String startTime = LocalDateTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss")); //record starting time

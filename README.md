@@ -33,9 +33,10 @@ Codes to download **US single stock** historical data using IB TWS API.
 - When a non-trading date entered, it will be shifted to the last trading day and request period remains unchanged
 
 #### API Limitations and Workarounds
-- Because request data types are seperated into bid, ask, and traded prices and only one can be sent per request, requests have to be repeatedly sent
-- IB emphasizes it is not a data provider and limits return data points to a few hundreds per request (soft limit), so data windows are directly tied to granularity/interval requested; for 1-min data, 390 (6.5hrs x 60mins) data points per day, so 2-3 days window per request appropriate
+- Because request data types are seperated into bid, ask, and traded prices and only one can be sent per request, requests have to be repeatedly submitted
+- IB emphasizes it is not a data provider and limits return data points to a few hundreds per request (soft limit), so data windows are directly tied to granularity/interval requested; for 1-min data, 390 (6.5hrs x 60mins) data points per day, so 2-3 days window per request about appropriate
 - Maximum 10 simultaneous requests
+- Impossible to retrieve data for a stock prior to most recent corporate action. IB uses unique contract id (conid) to identify each contract. IB changes the conid upon stock splits and M&A. Request for stock data is tied to current conid, so pre-action data tied to old conid shown as non-existent. IB does not allow for querying old conids, limiting data retrieval window to life span of current conid. Only workaround is to save all conids prior to changes for later use. 
 
 #### Logic Overview
 - One class (singleton), whose instance used to connect to TWS and perform all requests using different request identifiers (reqId)
@@ -53,4 +54,5 @@ Codes to download **US single stock** historical data using IB TWS API.
 - IB data feed is chronological, so synchronous saving of custom data is in natural order already; but Comparable\<Trades\> makes possible to sort Trades type based on datetime
 
 #### Future Works
-- Expand to non-equity contracts, especially FX and futures
+- Request and save contract id into a separate file storing and tracking all contract ids
+- Extend to non-equity contracts, especially FX and futures
